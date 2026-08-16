@@ -18,14 +18,15 @@ jobs:
       - name: Script parses and imports
         run: |
           python3 -c "import ast, pathlib; ast.parse(pathlib.Path('powerswitch').read_text())"
+          # copied to a .py name because importlib cannot infer a loader otherwise
+          cp powerswitch /tmp/pw.py
           python3 - <<'EOF'
-          import sys, pathlib, importlib.util
-          spec = importlib.util.spec_from_file_location("pw", pathlib.Path("powerswitch"))
-          mod = importlib.util.module_from_spec(spec)
-          spec.loader.exec_module(mod)
+          import sys, pathlib
+          sys.path.insert(0, "/tmp")
+          import pw as mod
           # config parsing is the one bit of logic worth asserting; the D-Bus and
           # GTK paths need a session bus and a display, neither of which CI has.
-          import json, os
+          import json
           cfg = pathlib.Path(mod.CONFIG)
           cfg.parent.mkdir(parents=True, exist_ok=True)
           for bad in ("[]", "not json{", '{"ac": "turbo", "junk": 1}', '{"ac": null}'):
