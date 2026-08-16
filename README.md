@@ -13,7 +13,7 @@ No root, no udev rules, no new packages. It talks to the UPower and
 power-profiles-daemon services that Ubuntu already runs, over D-Bus, as
 your own user.
 
-<!-- screenshot: docs/settings.png -->
+![The Power Switch settings window](docs/screenshot.png)
 
 ## Install
 
