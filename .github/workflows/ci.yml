@@ -37,6 +37,10 @@ jobs:
           cfg.unlink()
           assert mod.flip("performance") == "balanced"
           assert mod.flip("balanced") == mod.flip("power-saver") == "performance"
+          # the tray item is only double-clickable while it declares Activate
+          from gi.repository import Gio
+          iface = Gio.DBusNodeInfo.new_for_xml(mod.SNI_XML).interfaces[0]
+          assert iface.lookup_method("Activate"), "no Activate: the shell will not double-click"
           print("config parsing ok")
           EOF
 

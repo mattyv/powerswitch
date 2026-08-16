@@ -2,9 +2,9 @@
   "version": 1,
   "bundleId": "3f6c1b58-9d4a-4c17-8e2b-5a0d7c9e14b3",
   "revision": {
-    "number": 2,
-    "updatedAt": "2026-08-16T12:00:00.000Z",
-    "summary": "Added the tray middle-click toggle as a second trigger into apply()"
+    "number": 3,
+    "updatedAt": "2026-08-16T13:00:00.000Z",
+    "summary": "Tray toggle is a double-click on our own StatusNotifierItem"
   },
   "activeId": "profiles",
   "diagrams": [
@@ -85,17 +85,17 @@
           {
             "from": "balanced",
             "to": "performance",
-            "label": "middle click / flip"
+            "label": "double click / flip"
           },
           {
             "from": "powersaver",
             "to": "performance",
-            "label": "middle click / flip"
+            "label": "double click / flip"
           },
           {
             "from": "performance",
             "to": "balanced",
-            "label": "middle click / flip"
+            "label": "double click / flip"
           },
           {
             "from": "balanced",
@@ -118,7 +118,7 @@
           "__diagram__": [
             {
               "id": "d1",
-              "text": "Two triggers move between these states. UPower's OnBattery property changing (subscribed in powerswitch:142) drives the plug and unplug arrows; only two of those are live on the shipped defaults (ac = balanced, battery = power-saver). Middle-clicking the tray icon drives the flip arrows, which rewrite the stored profile for whichever state is live and re-run apply().",
+              "text": "Two triggers move between these states. UPower's OnBattery property changing (subscribed in powerswitch:212) drives the plug and unplug arrows; only two of those are live on the shipped defaults (ac = balanced, battery = power-saver). Double-clicking the tray icon drives the flip arrows, which rewrite the stored profile for whichever state is live and re-run apply().",
               "ts": 1786953600000
             }
           ],
@@ -139,7 +139,7 @@
           "performance": [
             {
               "id": "f1",
-              "text": "Never entered on the defaults. Reached either by choosing it in the settings window or by middle-clicking the tray icon, which flips the live state's stored profile to performance (flip() in powerswitch:56 sends anything that is not performance here). Firmware may silently degrade it on battery (PPD reports lap-detected or high-operating-temperature), so the state is set but not necessarily delivered.",
+              "text": "Never entered on the defaults. Reached either by choosing it in the settings window or by double-clicking the tray icon, which flips the live state's stored profile to performance (flip() in powerswitch:89 sends anything that is not performance here). Firmware may silently degrade it on battery (PPD reports lap-detected or high-operating-temperature), so the state is set but not necessarily delivered.",
               "ts": 1786953600000
             }
           ]
@@ -170,7 +170,7 @@
           },
           {
             "id": "toggle",
-            "label": "Tray middle click or menu",
+            "label": "Tray double click or menu",
             "files": [
               "powerswitch"
             ],
@@ -357,14 +357,14 @@
           "toggle": [
             {
               "id": "g1",
-              "text": "Tray icons carry no double-click: the shell forwards left click to the menu and middle click as SecondaryActivate, which powerswitch:95 targets at the same menu item, so both gestures run one code path.",
+              "text": "GNOME's appindicator extension only runs its double-click path when the tray item exports an Activate method (indicatorStatusIcon.js: _maybeHandleDoubleClick checks supportsActivation). libayatana-appindicator exports Scroll, SecondaryActivate and XAyatanaSecondaryActivate but no Activate, so powerswitch publishes its own StatusNotifierItem at /StatusNotifierItem and leaves the AppIndicator one PASSIVE \u2014 hidden by the shell, but still exporting the dbusmenu our item points at. Activate (double click) and SecondaryActivate (middle click) both land in powerswitch:131.",
               "ts": 1786996800000
             }
           ],
           "flipcfg": [
             {
               "id": "g2",
-              "text": "toggle() in powerswitch:133 rewrites the entry for whichever state is live — ac when plugged in, battery when not — between performance and balanced, saves it, then calls apply(). The change persists, so it survives the next unplug and shows up in the settings window.",
+              "text": "toggle() in powerswitch:201 rewrites the entry for whichever state is live \u2014 ac when plugged in, battery when not \u2014 flipping the profile actually in force between performance and balanced, saving it, then calling apply(). The change persists, so it survives the next unplug and shows up in the settings window.",
               "ts": 1786996800000
             }
           ],

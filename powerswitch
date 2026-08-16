@@ -25,6 +25,36 @@ SERVICE = "powerswitch.service"
 
 UPOWER = ("org.freedesktop.UPower", "/org/freedesktop/UPower", "org.freedesktop.UPower")
 PPD = ("net.hadess.PowerProfiles", "/net/hadess/PowerProfiles", "net.hadess.PowerProfiles")
+WATCHER = ("org.kde.StatusNotifierWatcher", "/StatusNotifierWatcher",
+           "org.kde.StatusNotifierWatcher")
+
+APP_ID = "powerswitch"
+SNI_IFACE = "org.kde.StatusNotifierItem"
+SNI_PATH = "/StatusNotifierItem"
+# where libayatana-appindicator exports the menu once set_menu() is called
+MENU_PATH = f"/org/ayatana/NotificationItem/{APP_ID}/Menu"
+# Our own tray item. libayatana's has no Activate method, so GNOME's appindicator
+# extension sets supportsActivation = false and its double-click path never runs
+# (indicatorStatusIcon.js: _maybeHandleDoubleClick). Declaring Activate is the whole
+# reason this exists — everything else here is the minimum the shell reads.
+SNI_XML = """
+<node>
+  <interface name="org.kde.StatusNotifierItem">
+    <property name="Category" type="s" access="read"/>
+    <property name="Id" type="s" access="read"/>
+    <property name="Title" type="s" access="read"/>
+    <property name="Status" type="s" access="read"/>
+    <property name="IconName" type="s" access="read"/>
+    <property name="ItemIsMenu" type="b" access="read"/>
+    <property name="Menu" type="o" access="read"/>
+    <method name="Activate"><arg type="i" direction="in"/><arg type="i" direction="in"/></method>
+    <method name="SecondaryActivate"><arg type="i" direction="in"/><arg type="i" direction="in"/></method>
+    <method name="ContextMenu"><arg type="i" direction="in"/><arg type="i" direction="in"/></method>
+    <method name="Scroll"><arg type="i" direction="in"/><arg type="s" direction="in"/></method>
+    <signal name="NewIcon"/>
+  </interface>
+</node>
+"""
 
 
 def load():
@@ -87,19 +117,54 @@ def indicator(toggle):
         menu.append(item)
     menu.show_all()
 
+    # Left PASSIVE on purpose: the shell hides it, but set_menu() still exports the
+    # menu over D-Bus, which our own item below points at. Nothing else here can
+    # build a dbusmenu without pulling in a new package.
     ind = AppIndicator.Indicator.new(
-        "powerswitch", "power-profile-balanced-symbolic",
-        AppIndicator.IndicatorCategory.HARDWARE,
+        APP_ID, "power-profile-balanced-symbolic", AppIndicator.IndicatorCategory.HARDWARE,
     )
-    ind.set_status(AppIndicator.IndicatorStatus.ACTIVE)
     ind.set_menu(menu)
-    # tray icons have no double-click: left click is the menu, so middle click
-    # ("secondary activate") is the only spare gesture the shell forwards to us.
-    ind.set_secondary_activate_target(boost)
 
-    def update(on_battery, profile):
-        ind.set_icon_full(f"power-profile-{profile}-symbolic", profile)
+    icon = "power-profile-balanced-symbolic"
+    bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+
+    def on_call(_conn, _sender, _path, _iface, method, _args, invocation):
+        # double-click and middle-click both land here; right-click gets the menu
+        if method in ("Activate", "SecondaryActivate"):
+            toggle()
+        invocation.return_value(None)
+
+    def on_get(_conn, _sender, _path, _iface, prop):
+        if prop == "Menu":
+            return GLib.Variant("o", MENU_PATH)
+        if prop == "ItemIsMenu":
+            return GLib.Variant("b", False)  # false = we handle clicks, menu is secondary
+        value = {"Category": "Hardware", "Id": APP_ID, "Title": "Power Switch",
+                 "Status": "Active", "IconName": icon}.get(prop)
+        return GLib.Variant("s", value) if value else None
+
+    try:
+        node = Gio.DBusNodeInfo.new_for_xml(SNI_XML)
+        bus.register_object(SNI_PATH, node.interfaces[0], on_call, on_get, None)
+    except GLib.Error as e:  # no session bus, or the path is taken
+        print(f"tray unavailable: {e}", flush=True)
+        return None
+
+    def register(*_):
+        """Also runs when gnome-shell restarts and a new watcher appears."""
+        bus.call_sync(*WATCHER, "RegisterStatusNotifierItem",
+                      GLib.Variant("(s)", (SNI_PATH,)), None, Gio.DBusCallFlags.NONE, -1, None)
+
+    Gio.bus_watch_name_on_connection(
+        bus, WATCHER[0], Gio.BusNameWatcherFlags.NONE, register, None)
+
+    # ind and menu are otherwise unreferenced once we return, and GC takes the menu
+    # off the bus with them
+    def update(on_battery, profile, _keepalive=(ind, menu)):
+        nonlocal icon
+        icon = f"power-profile-{profile}-symbolic"
         state.set_label(f"{'On battery' if on_battery else 'Plugged in'} — {profile}")
+        bus.emit_signal(None, SNI_PATH, SNI_IFACE, "NewIcon", None)
 
     return update
 

@@ -5,8 +5,9 @@ Switches the GNOME power profile automatically when you plug in or unplug.
 GNOME can drop to power-saver on low battery, but it has no setting for
 "performance on AC, power-saver on battery". This is that setting.
 
-- **Top bar icon** showing the current profile, with a menu. Middle-click it
-  (or use its menu) to flip the current state between performance and balanced.
+- **Top bar icon** showing the current profile, with a menu. Double-click it
+  to flip the current state between performance and balanced (middle-click and
+  the menu do the same thing).
 - **Settings window** (GTK4/libadwaita) to pick the profile for each state.
 - **Notification** when the profile changes.
 
@@ -71,9 +72,9 @@ stateDiagram-v2
   performance --> balanced: unplug / battery = balanced
   powersaver --> performance: plug in / ac = performance
   performance --> powersaver: unplug / battery = power-saver
-  balanced --> performance: middle click / flip
-  powersaver --> performance: middle click / flip
-  performance --> balanced: middle click / flip
+  balanced --> performance: double click / flip
+  powersaver --> performance: double click / flip
+  performance --> balanced: double click / flip
   balanced --> balanced: hold active / no write
   powersaver --> powersaver: hold active / no write
   performance --> performance: hold active / no write
@@ -81,7 +82,7 @@ stateDiagram-v2
 
 On the shipped defaults only the two plug/unplug arrows between `balanced`
 and `power-saver` ever fire. The rest need `performance` configured — either
-in a dropdown, or by middle-clicking the top bar icon, which flips the
+in a dropdown, or by double-clicking the top bar icon, which flips the
 profile stored for whichever state you are in right now and keeps it.
 
 The self-loops are the safety property: when another application holds a
@@ -95,7 +96,7 @@ performance. Writing the profile would cancel their hold, so it does not.
 flowchart TD
   subgraph trigger["Trigger"]
     event["UPower property changed"]
-    toggle["Tray middle click or menu"]
+    toggle["Tray double click or menu"]
     flipcfg["Flip live state's profile, save"]
     readstate["Read OnBattery"]
   end
@@ -126,10 +127,15 @@ Lid open and close land in this handler too, because `LidIsClosed` sits on
 the same UPower interface as `OnBattery`. Both guards short-circuit to the
 tray update, so the common case writes nothing at all.
 
-The tray toggle takes the same path. Middle-clicking the icon (or picking
-**Toggle performance/balanced** from its menu) rewrites the stored profile
-for the state you are in and runs the handler again, so a held profile is
-still left alone.
+The tray toggle takes the same path. Double-clicking the icon rewrites the
+stored profile for the state you are in and runs the handler again, so a held
+profile is still left alone. Middle-click and the menu item do the same.
+
+Double-click needs an `Activate` method, which `libayatana-appindicator` does
+not export — GNOME's appindicator extension checks for it and otherwise skips
+its double-click handling entirely. So powerswitch publishes its own
+`StatusNotifierItem` and keeps the AppIndicator one hidden, purely to borrow
+the menu it exports over D-Bus.
 
 The diagrams above are generated from `.archi/powerswitch.json`; the node
 comments in that bundle carry the detail and the `file:line` references.
