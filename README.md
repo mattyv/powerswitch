@@ -5,7 +5,8 @@ Switches the GNOME power profile automatically when you plug in or unplug.
 GNOME can drop to power-saver on low battery, but it has no setting for
 "performance on AC, power-saver on battery". This is that setting.
 
-- **Top bar icon** showing the current profile, with a menu.
+- **Top bar icon** showing the current profile, with a menu. Middle-click it
+  (or use its menu) to flip the current state between performance and balanced.
 - **Settings window** (GTK4/libadwaita) to pick the profile for each state.
 - **Notification** when the profile changes.
 
@@ -70,13 +71,18 @@ stateDiagram-v2
   performance --> balanced: unplug / battery = balanced
   powersaver --> performance: plug in / ac = performance
   performance --> powersaver: unplug / battery = power-saver
+  balanced --> performance: middle click / flip
+  powersaver --> performance: middle click / flip
+  performance --> balanced: middle click / flip
   balanced --> balanced: hold active / no write
   powersaver --> powersaver: hold active / no write
   performance --> performance: hold active / no write
 ```
 
-On the shipped defaults only two of those transitions ever fire. Every
-arrow touching `performance` needs a dropdown changed first.
+On the shipped defaults only the two plug/unplug arrows between `balanced`
+and `power-saver` ever fire. The rest need `performance` configured — either
+in a dropdown, or by middle-clicking the top bar icon, which flips the
+profile stored for whichever state you are in right now and keeps it.
 
 The self-loops are the safety property: when another application holds a
 profile, powerswitch leaves it alone. GNOME's Automatic Power Saver takes
@@ -89,6 +95,8 @@ performance. Writing the profile would cancel their hold, so it does not.
 flowchart TD
   subgraph trigger["Trigger"]
     event["UPower property changed"]
+    toggle["Tray middle click or menu"]
+    flipcfg["Flip live state's profile, save"]
     readstate["Read OnBattery"]
   end
   subgraph decide["Decide"]
@@ -102,6 +110,8 @@ flowchart TD
     tray["Update top bar icon"]
   end
   event --> readstate
+  toggle --> flipcfg
+  flipcfg -->|"re-runs apply()"| readstate
   readstate --> readcfg
   readcfg --> held
   held -->|"yes — leave it alone"| tray
@@ -115,6 +125,11 @@ flowchart TD
 Lid open and close land in this handler too, because `LidIsClosed` sits on
 the same UPower interface as `OnBattery`. Both guards short-circuit to the
 tray update, so the common case writes nothing at all.
+
+The tray toggle takes the same path. Middle-clicking the icon (or picking
+**Toggle performance/balanced** from its menu) rewrites the stored profile
+for the state you are in and runs the handler again, so a held profile is
+still left alone.
 
 The diagrams above are generated from `.archi/powerswitch.json`; the node
 comments in that bundle carry the detail and the `file:line` references.

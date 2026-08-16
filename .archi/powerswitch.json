@@ -2,9 +2,9 @@
   "version": 1,
   "bundleId": "3f6c1b58-9d4a-4c17-8e2b-5a0d7c9e14b3",
   "revision": {
-    "number": 1,
-    "updatedAt": "2026-08-16T00:00:00.000Z",
-    "summary": "Profile state machine and the apply() decision flow"
+    "number": 2,
+    "updatedAt": "2026-08-16T12:00:00.000Z",
+    "summary": "Added the tray middle-click toggle as a second trigger into apply()"
   },
   "activeId": "profiles",
   "diagrams": [
@@ -84,6 +84,21 @@
           },
           {
             "from": "balanced",
+            "to": "performance",
+            "label": "middle click / flip"
+          },
+          {
+            "from": "powersaver",
+            "to": "performance",
+            "label": "middle click / flip"
+          },
+          {
+            "from": "performance",
+            "to": "balanced",
+            "label": "middle click / flip"
+          },
+          {
+            "from": "balanced",
             "to": "balanced",
             "label": "hold active / no write"
           },
@@ -103,7 +118,7 @@
           "__diagram__": [
             {
               "id": "d1",
-              "text": "Only two transitions are live on the shipped defaults (ac = balanced, battery = power-saver). Every arrow into or out of performance requires changing a dropdown in the settings window. There is no transition powerswitch drives on its own: the sole trigger is UPower's OnBattery property changing, which the daemon subscribes to in powerswitch:119.",
+              "text": "Two triggers move between these states. UPower's OnBattery property changing (subscribed in powerswitch:142) drives the plug and unplug arrows; only two of those are live on the shipped defaults (ac = balanced, battery = power-saver). Middle-clicking the tray icon drives the flip arrows, which rewrite the stored profile for whichever state is live and re-run apply().",
               "ts": 1786953600000
             }
           ],
@@ -124,7 +139,7 @@
           "performance": [
             {
               "id": "f1",
-              "text": "Never entered on the defaults; reachable only by choosing it in the settings window. Firmware may silently degrade it on battery (PPD reports lap-detected or high-operating-temperature), so the state is set but not necessarily delivered.",
+              "text": "Never entered on the defaults. Reached either by choosing it in the settings window or by middle-clicking the tray icon, which flips the live state's stored profile to performance (flip() in powerswitch:56 sends anything that is not performance here). Firmware may silently degrade it on battery (PPD reports lap-detected or high-operating-temperature), so the state is set but not necessarily delivered.",
               "ts": 1786953600000
             }
           ]
@@ -152,6 +167,26 @@
             "group": "trigger",
             "x": 40,
             "y": 40
+          },
+          {
+            "id": "toggle",
+            "label": "Tray middle click or menu",
+            "files": [
+              "powerswitch"
+            ],
+            "group": "trigger",
+            "x": 340,
+            "y": 40
+          },
+          {
+            "id": "flipcfg",
+            "label": "Flip live state's profile, save",
+            "files": [
+              "powerswitch"
+            ],
+            "group": "trigger",
+            "x": 340,
+            "y": 140
           },
           {
             "id": "readstate",
@@ -233,6 +268,16 @@
             "label": ""
           },
           {
+            "from": "toggle",
+            "to": "flipcfg",
+            "label": ""
+          },
+          {
+            "from": "flipcfg",
+            "to": "readstate",
+            "label": "re-runs apply()"
+          },
+          {
             "from": "readstate",
             "to": "readcfg",
             "label": ""
@@ -291,7 +336,7 @@
           "__diagram__": [
             {
               "id": "a1",
-              "text": "This runs on every OnBattery change and once at daemon startup. Both guards short-circuit to the tray update, so the common case writes nothing at all.",
+              "text": "This runs on every OnBattery change, once at daemon startup, and whenever the tray toggle fires. Both guards short-circuit to the tray update, so the common case writes nothing at all.",
               "ts": 1786953600000
             }
           ],
@@ -307,6 +352,20 @@
               "id": "h1",
               "text": "Reads ActiveProfileHolds. Writing ActiveProfile releases every hold, which would cancel GNOME's low-battery power-saver protection \u2014 so a held profile is left untouched. The cost: after the hold releases, the profile is not corrected until the next plug event.",
               "ts": 1786953600000
+            }
+          ],
+          "toggle": [
+            {
+              "id": "g1",
+              "text": "Tray icons carry no double-click: the shell forwards left click to the menu and middle click as SecondaryActivate, which powerswitch:95 targets at the same menu item, so both gestures run one code path.",
+              "ts": 1786996800000
+            }
+          ],
+          "flipcfg": [
+            {
+              "id": "g2",
+              "text": "toggle() in powerswitch:133 rewrites the entry for whichever state is live — ac when plugged in, battery when not — between performance and balanced, saves it, then calls apply(). The change persists, so it survives the next unplug and shows up in the settings window.",
+              "ts": 1786996800000
             }
           ],
           "readcfg": [

@@ -35,6 +35,8 @@ jobs:
           cfg.write_text(json.dumps({"ac": "performance", "battery": "balanced"}))
           assert mod.load() == {"ac": "performance", "battery": "balanced"}
           cfg.unlink()
+          assert mod.flip("performance") == "balanced"
+          assert mod.flip("balanced") == mod.flip("power-saver") == "performance"
           print("config parsing ok")
           EOF
 

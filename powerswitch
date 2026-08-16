@@ -18,6 +18,7 @@ from gi.repository import Gio, GLib  # noqa: E402
 SELF = pathlib.Path(__file__).resolve()
 
 PROFILES = ["performance", "balanced", "power-saver"]
+BOOST, BASE = "performance", "balanced"  # the two the tray icon flips between
 DEFAULTS = {"ac": "balanced", "battery": "power-saver"}
 CONFIG = pathlib.Path(GLib.get_user_config_dir()) / "powerswitch.json"
 SERVICE = "powerswitch.service"
@@ -36,7 +37,10 @@ def load():
 
 
 def save(cfg):
-    CONFIG.write_text(json.dumps(cfg, indent=2))
+    # two writers now (settings window and tray toggle), so never leave a half file
+    tmp = CONFIG.with_suffix(".tmp")
+    tmp.write_text(json.dumps(cfg, indent=2))
+    tmp.replace(CONFIG)
 
 
 def systemctl(*args):
@@ -52,7 +56,12 @@ def proxy(triple):
     )
 
 
-def indicator():
+def flip(profile):
+    """The other of BOOST/BASE; anything else boosts."""
+    return BASE if profile == BOOST else BOOST
+
+
+def indicator(toggle):
     """Top bar icon, or None if AppIndicator isn't available (headless, no extension)."""
     try:
         gi.require_version("Gtk", "3.0")
@@ -71,8 +80,10 @@ def indicator():
     settings.connect("activate", lambda _: subprocess.Popen(
         ["systemd-run", "--user", "--quiet", "--collect", str(SELF)]
     ))
+    boost = Gtk.MenuItem(label=f"Toggle {BOOST}/{BASE}")
+    boost.connect("activate", lambda _: toggle())
     # ponytail: no Quit item — the service owns the lifetime, use the settings toggle
-    for item in (state, Gtk.SeparatorMenuItem(), settings):
+    for item in (state, Gtk.SeparatorMenuItem(), boost, settings):
         menu.append(item)
     menu.show_all()
 
@@ -82,6 +93,9 @@ def indicator():
     )
     ind.set_status(AppIndicator.IndicatorStatus.ACTIVE)
     ind.set_menu(menu)
+    # tray icons have no double-click: left click is the menu, so middle click
+    # ("secondary activate") is the only spare gesture the shell forwards to us.
+    ind.set_secondary_activate_target(boost)
 
     def update(on_battery, profile):
         ind.set_icon_full(f"power-profile-{profile}-symbolic", profile)
@@ -92,7 +106,7 @@ def indicator():
 
 def daemon():
     upower, ppd = proxy(UPOWER), proxy(PPD)
-    update = indicator()
+    update = None
 
     def apply(*_):
         on_battery = upower.get_cached_property("OnBattery").get_boolean()
@@ -119,6 +133,17 @@ def daemon():
         if update:
             update(on_battery, active)
 
+    def toggle():
+        """Flip the profile for whichever source is live, and make it stick."""
+        key = "battery" if upower.get_cached_property("OnBattery").get_boolean() else "ac"
+        cfg = load()
+        # flip what is actually in force, not what is configured — otherwise the first
+        # click after a manual change in Quick Settings looks like it did nothing
+        cfg[key] = flip(ppd.get_cached_property("ActiveProfile").get_string())
+        save(cfg)
+        apply()
+
+    update = indicator(toggle)
     upower.connect("g-properties-changed", apply)
     try:
         apply()  # startup is the one path where an exception would kill the service
@@ -137,12 +162,12 @@ def gui():
     class Window(Adw.ApplicationWindow):
         def __init__(self, app):
             super().__init__(application=app, title="Power Switch", default_width=460)
-            self.cfg = load()
+            cfg = load()
 
             group = Adw.PreferencesGroup(title="Profile to use")
             for key, label in (("ac", "Plugged in"), ("battery", "On battery")):
                 row = Adw.ComboRow(title=label, model=Gtk.StringList.new(PROFILES))
-                row.set_selected(PROFILES.index(self.cfg[key]))
+                row.set_selected(PROFILES.index(cfg[key]))
                 row.connect("notify::selected", self.on_profile, key)
                 group.add(row)
 
@@ -160,8 +185,10 @@ def gui():
             self.set_content(view)
 
         def on_profile(self, row, _param, key):
-            self.cfg[key] = PROFILES[row.get_selected()]
-            save(self.cfg)
+            # re-read: the tray toggle may have written the other key since we opened
+            cfg = load()
+            cfg[key] = PROFILES[row.get_selected()]
+            save(cfg)
             systemctl("try-restart", SERVICE)
 
         def on_toggle(self, switch, _param):
