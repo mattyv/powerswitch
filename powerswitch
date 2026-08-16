@@ -1,0 +1,177 @@
+#!/usr/bin/env python3
+"""Auto-switch power profiles on AC/battery.
+
+No args  -> settings window.
+--daemon -> watch UPower, apply the configured profile.
+"""
+import json
+import pathlib
+import subprocess
+import sys
+
+import gi
+
+from gi.repository import Gio, GLib  # noqa: E402
+
+# Gtk is pinned inside daemon()/gui(): the tray needs Gtk3 (AppIndicator),
+# the settings window needs Gtk4. They cannot share a process.
+SELF = pathlib.Path(__file__).resolve()
+
+PROFILES = ["performance", "balanced", "power-saver"]
+DEFAULTS = {"ac": "balanced", "battery": "power-saver"}
+CONFIG = pathlib.Path(GLib.get_user_config_dir()) / "powerswitch.json"
+SERVICE = "powerswitch.service"
+
+UPOWER = ("org.freedesktop.UPower", "/org/freedesktop/UPower", "org.freedesktop.UPower")
+PPD = ("net.hadess.PowerProfiles", "/net/hadess/PowerProfiles", "net.hadess.PowerProfiles")
+
+
+def load():
+    try:
+        cfg = {**DEFAULTS, **json.loads(CONFIG.read_text())}
+    except (OSError, ValueError, TypeError):  # missing, corrupt, or not a JSON object
+        return dict(DEFAULTS)
+    # config is hand-editable, so don't trust it into a D-Bus call
+    return {k: v if v in PROFILES else DEFAULTS[k] for k, v in cfg.items() if k in DEFAULTS}
+
+
+def save(cfg):
+    CONFIG.write_text(json.dumps(cfg, indent=2))
+
+
+def systemctl(*args):
+    return subprocess.run(["systemctl", "--user", *args], capture_output=True, text=True)
+
+
+# --- daemon ---------------------------------------------------------------
+
+def proxy(triple):
+    name, path, iface = triple
+    return Gio.DBusProxy.new_for_bus_sync(
+        Gio.BusType.SYSTEM, Gio.DBusProxyFlags.NONE, None, name, path, iface, None
+    )
+
+
+def indicator():
+    """Top bar icon, or None if AppIndicator isn't available (headless, no extension)."""
+    try:
+        gi.require_version("Gtk", "3.0")
+        gi.require_version("AyatanaAppIndicator3", "0.1")
+        from gi.repository import AyatanaAppIndicator3 as AppIndicator
+        from gi.repository import Gtk
+    except (ImportError, ValueError):
+        return None
+
+    menu = Gtk.Menu()
+    state = Gtk.MenuItem(label="…")
+    state.set_sensitive(False)
+    settings = Gtk.MenuItem(label="Settings…")
+    # systemd-run, not Popen: a plain child shares this service's cgroup, so the
+    # settings window would kill itself the moment it restarted or disabled us.
+    settings.connect("activate", lambda _: subprocess.Popen(
+        ["systemd-run", "--user", "--quiet", "--collect", str(SELF)]
+    ))
+    # ponytail: no Quit item — the service owns the lifetime, use the settings toggle
+    for item in (state, Gtk.SeparatorMenuItem(), settings):
+        menu.append(item)
+    menu.show_all()
+
+    ind = AppIndicator.Indicator.new(
+        "powerswitch", "power-profile-balanced-symbolic",
+        AppIndicator.IndicatorCategory.HARDWARE,
+    )
+    ind.set_status(AppIndicator.IndicatorStatus.ACTIVE)
+    ind.set_menu(menu)
+
+    def update(on_battery, profile):
+        ind.set_icon_full(f"power-profile-{profile}-symbolic", profile)
+        state.set_label(f"{'On battery' if on_battery else 'Plugged in'} — {profile}")
+
+    return update
+
+
+def daemon():
+    upower, ppd = proxy(UPOWER), proxy(PPD)
+    update = indicator()
+
+    def apply(*_):
+        on_battery = upower.get_cached_property("OnBattery").get_boolean()
+        want = load()["battery" if on_battery else "ac"]
+        active = ppd.get_cached_property("ActiveProfile").get_string()
+        # Someone else (GNOME's low-battery saver, a game) is holding a profile —
+        # writing ActiveProfile would release their hold, so leave it alone.
+        # ponytail: we only watch UPower, so after a hold releases the profile stays
+        # as they left it until the next plug event. Watch PPD too if that grates —
+        # but then we'd also stomp profiles you picked by hand in Quick Settings.
+        held = bool(ppd.get_cached_property("ActiveProfileHolds").unpack())
+        if active != want and not held:
+            ppd.get_connection().call_sync(
+                PPD[0], PPD[1], "org.freedesktop.DBus.Properties", "Set",
+                GLib.Variant("(ssv)", (PPD[2], "ActiveProfile", GLib.Variant("s", want))),
+                None, Gio.DBusCallFlags.NONE, -1, None,
+            )
+            print(f"on_battery={on_battery} -> {want}", flush=True)
+            subprocess.Popen([
+                "notify-send", "-a", "Power Switch", "-i", f"power-profile-{want}-symbolic",
+                "On battery" if on_battery else "Plugged in", f"Power mode: {want}",
+            ])
+            active = want
+        if update:
+            update(on_battery, active)
+
+    upower.connect("g-properties-changed", apply)
+    try:
+        apply()  # startup is the one path where an exception would kill the service
+    except Exception as e:
+        print(f"initial apply failed: {e}", flush=True)
+    GLib.MainLoop().run()
+
+
+# --- gui ------------------------------------------------------------------
+
+def gui():
+    gi.require_version("Gtk", "4.0")
+    gi.require_version("Adw", "1")
+    from gi.repository import Adw, Gtk
+
+    class Window(Adw.ApplicationWindow):
+        def __init__(self, app):
+            super().__init__(application=app, title="Power Switch", default_width=460)
+            self.cfg = load()
+
+            group = Adw.PreferencesGroup(title="Profile to use")
+            for key, label in (("ac", "Plugged in"), ("battery", "On battery")):
+                row = Adw.ComboRow(title=label, model=Gtk.StringList.new(PROFILES))
+                row.set_selected(PROFILES.index(self.cfg[key]))
+                row.connect("notify::selected", self.on_profile, key)
+                group.add(row)
+
+            self.switch = Adw.SwitchRow(
+                title="Switch automatically", subtitle="Runs in the background at login"
+            )
+            self.switch.set_active(systemctl("is-active", "--quiet", SERVICE).returncode == 0)
+            self.switch.connect("notify::active", self.on_toggle)
+            group.add(self.switch)
+
+            page = Adw.PreferencesPage()
+            page.add(group)
+            view = Adw.ToolbarView(content=page)
+            view.add_top_bar(Adw.HeaderBar())
+            self.set_content(view)
+
+        def on_profile(self, row, _param, key):
+            self.cfg[key] = PROFILES[row.get_selected()]
+            save(self.cfg)
+            systemctl("try-restart", SERVICE)
+
+        def on_toggle(self, switch, _param):
+            verb = "enable" if switch.get_active() else "disable"
+            systemctl(verb, "--now", SERVICE)
+
+    app = Adw.Application(application_id="dev.local.PowerSwitch")
+    app.connect("activate", lambda a: Window(a).present())
+    app.run([])
+
+
+if __name__ == "__main__":
+    daemon() if "--daemon" in sys.argv else gui()

@@ -1,0 +1,63 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  deb:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build .deb
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          PKG="powerswitch_${VERSION}_all"
+
+          install -Dm755 powerswitch          "$PKG/usr/bin/powerswitch"
+          install -Dm644 powerswitch.desktop  "$PKG/usr/share/applications/powerswitch.desktop"
+          # unit ships to the system-wide user-unit dir; each user enables it themselves
+          install -Dm644 powerswitch.service  "$PKG/usr/lib/systemd/user/powerswitch.service"
+          sed -i 's|^ExecStart=.*|ExecStart=/usr/bin/powerswitch --daemon|' \
+            "$PKG/usr/lib/systemd/user/powerswitch.service"
+
+          mkdir -p "$PKG/DEBIAN"
+          cat > "$PKG/DEBIAN/control" <<EOF
+          Package: powerswitch
+          Version: ${VERSION}
+          Section: utils
+          Priority: optional
+          Architecture: all
+          Depends: python3-gi, gir1.2-gtk-4.0, gir1.2-adw-1, libnotify-bin, power-profiles-daemon
+          Recommends: gir1.2-ayatanaappindicator3-0.1, gnome-shell-extension-appindicator
+          Maintainer: mattyv <mattyv@users.noreply.github.com>
+          Description: Auto-switch GNOME power profiles on AC/battery
+           Sets the power-profiles-daemon profile when you plug in or unplug,
+           with a top bar icon and a small settings window. GNOME's built-in
+           Automatic Power Saver only fires at low battery; this covers the
+           plug/unplug case.
+          EOF
+
+          dpkg-deb --build --root-owner-group "$PKG"
+          dpkg-deb --info "$PKG.deb"
+          echo "DEB=$PKG.deb" >> "$GITHUB_ENV"
+
+      - name: Package installs cleanly
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ./"$DEB"
+          test -x /usr/bin/powerswitch
+          test -f /usr/lib/systemd/user/powerswitch.service
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.DEB }}
+          body: |
+            ```sh
+            sudo apt install ./${{ env.DEB }}
+            systemctl --user enable --now powerswitch
+            ```

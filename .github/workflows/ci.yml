@@ -1,0 +1,49 @@
+name: ci
+
+on: [push, pull_request]
+
+jobs:
+  install:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            python3-gi gir1.2-gtk-3.0 gir1.2-gtk-4.0 gir1.2-adw-1 \
+            gir1.2-ayatanaappindicator3-0.1 libnotify-bin
+
+      - name: Script parses and imports
+        run: |
+          python3 -c "import ast, pathlib; ast.parse(pathlib.Path('powerswitch').read_text())"
+          python3 - <<'EOF'
+          import sys, pathlib, importlib.util
+          spec = importlib.util.spec_from_file_location("pw", pathlib.Path("powerswitch"))
+          mod = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(mod)
+          # config parsing is the one bit of logic worth asserting; the D-Bus and
+          # GTK paths need a session bus and a display, neither of which CI has.
+          import json, os
+          cfg = pathlib.Path(mod.CONFIG)
+          cfg.parent.mkdir(parents=True, exist_ok=True)
+          for bad in ("[]", "not json{", '{"ac": "turbo", "junk": 1}', '{"ac": null}'):
+              cfg.write_text(bad)
+              assert mod.load() == mod.DEFAULTS, f"{bad!r} -> {mod.load()}"
+          cfg.write_text(json.dumps({"ac": "performance", "battery": "balanced"}))
+          assert mod.load() == {"ac": "performance", "battery": "balanced"}
+          cfg.unlink()
+          print("config parsing ok")
+          EOF
+
+      - name: install.sh places every file
+        run: |
+          ./install.sh
+          test -L ~/.local/bin/powerswitch
+          test -L ~/.config/systemd/user/powerswitch.service
+          test -L ~/.local/share/applications/powerswitch.desktop
+          test -x "$(readlink -f ~/.local/bin/powerswitch)"
+
+      - name: install.sh is re-runnable
+        run: ./install.sh

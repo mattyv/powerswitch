@@ -1,0 +1,331 @@
+{
+  "version": 1,
+  "bundleId": "3f6c1b58-9d4a-4c17-8e2b-5a0d7c9e14b3",
+  "revision": {
+    "number": 1,
+    "updatedAt": "2026-08-16T00:00:00.000Z",
+    "summary": "Profile state machine and the apply() decision flow"
+  },
+  "activeId": "profiles",
+  "diagrams": [
+    {
+      "id": "profiles",
+      "name": "Power Profiles",
+      "type": "state",
+      "origin": "llm",
+      "generation": {
+        "focus": "The three power-profiles-daemon profiles and the transitions powerswitch drives between them",
+        "customScenario": true
+      },
+      "doc": {
+        "type": "state",
+        "nodes": [
+          {
+            "id": "performance",
+            "label": "performance",
+            "files": [
+              "powerswitch"
+            ],
+            "x": 40,
+            "y": 40,
+            "step": 3
+          },
+          {
+            "id": "balanced",
+            "label": "balanced",
+            "files": [
+              "powerswitch"
+            ],
+            "x": 320,
+            "y": 40,
+            "step": 1
+          },
+          {
+            "id": "powersaver",
+            "label": "power-saver",
+            "files": [
+              "powerswitch"
+            ],
+            "x": 600,
+            "y": 40,
+            "step": 2
+          }
+        ],
+        "edges": [
+          {
+            "from": "balanced",
+            "to": "powersaver",
+            "label": "unplug / battery = power-saver"
+          },
+          {
+            "from": "powersaver",
+            "to": "balanced",
+            "label": "plug in / ac = balanced"
+          },
+          {
+            "from": "balanced",
+            "to": "performance",
+            "label": "plug in / ac = performance"
+          },
+          {
+            "from": "performance",
+            "to": "balanced",
+            "label": "unplug / battery = balanced"
+          },
+          {
+            "from": "powersaver",
+            "to": "performance",
+            "label": "plug in / ac = performance"
+          },
+          {
+            "from": "performance",
+            "to": "powersaver",
+            "label": "unplug / battery = power-saver"
+          },
+          {
+            "from": "balanced",
+            "to": "balanced",
+            "label": "hold active / no write"
+          },
+          {
+            "from": "powersaver",
+            "to": "powersaver",
+            "label": "hold active / no write"
+          },
+          {
+            "from": "performance",
+            "to": "performance",
+            "label": "hold active / no write"
+          }
+        ],
+        "groups": [],
+        "comments": {
+          "__diagram__": [
+            {
+              "id": "d1",
+              "text": "Only two transitions are live on the shipped defaults (ac = balanced, battery = power-saver). Every arrow into or out of performance requires changing a dropdown in the settings window. There is no transition powerswitch drives on its own: the sole trigger is UPower's OnBattery property changing, which the daemon subscribes to in powerswitch:119.",
+              "ts": 1786953600000
+            }
+          ],
+          "balanced": [
+            {
+              "id": "b1",
+              "text": "Default for AC (DEFAULTS in powerswitch:21). Full boost under load, but the platform profile stays quiet and cool.",
+              "ts": 1786953600000
+            }
+          ],
+          "powersaver": [
+            {
+              "id": "p1",
+              "text": "Default for battery. Also the profile GNOME's Automatic Power Saver takes a hold on when the battery gets low \u2014 see the self-loop.",
+              "ts": 1786953600000
+            }
+          ],
+          "performance": [
+            {
+              "id": "f1",
+              "text": "Never entered on the defaults; reachable only by choosing it in the settings window. Firmware may silently degrade it on battery (PPD reports lap-detected or high-operating-temperature), so the state is set but not necessarily delivered.",
+              "ts": 1786953600000
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "apply",
+      "name": "Apply Decision",
+      "type": "flow",
+      "origin": "llm",
+      "generation": {
+        "focus": "What apply() does on each UPower property change",
+        "customScenario": true
+      },
+      "doc": {
+        "type": "flow",
+        "nodes": [
+          {
+            "id": "event",
+            "label": "UPower property changed",
+            "files": [
+              "powerswitch"
+            ],
+            "group": "trigger",
+            "x": 40,
+            "y": 40
+          },
+          {
+            "id": "readstate",
+            "label": "Read OnBattery",
+            "files": [
+              "powerswitch"
+            ],
+            "group": "trigger",
+            "x": 40,
+            "y": 140
+          },
+          {
+            "id": "readcfg",
+            "label": "Look up wanted profile",
+            "files": [
+              "powerswitch"
+            ],
+            "group": "decide",
+            "x": 40,
+            "y": 240
+          },
+          {
+            "id": "held",
+            "label": "Profile held elsewhere?",
+            "shape": "decision",
+            "files": [
+              "powerswitch"
+            ],
+            "group": "decide",
+            "x": 40,
+            "y": 360
+          },
+          {
+            "id": "same",
+            "label": "Already correct?",
+            "shape": "decision",
+            "files": [
+              "powerswitch"
+            ],
+            "group": "decide",
+            "x": 40,
+            "y": 500
+          },
+          {
+            "id": "write",
+            "label": "Set ActiveProfile",
+            "files": [
+              "powerswitch"
+            ],
+            "group": "act",
+            "x": 340,
+            "y": 500
+          },
+          {
+            "id": "notify",
+            "label": "Notify",
+            "files": [
+              "powerswitch"
+            ],
+            "group": "act",
+            "x": 340,
+            "y": 600
+          },
+          {
+            "id": "tray",
+            "label": "Update top bar icon",
+            "files": [
+              "powerswitch"
+            ],
+            "group": "act",
+            "x": 40,
+            "y": 640
+          }
+        ],
+        "edges": [
+          {
+            "from": "event",
+            "to": "readstate",
+            "label": ""
+          },
+          {
+            "from": "readstate",
+            "to": "readcfg",
+            "label": ""
+          },
+          {
+            "from": "readcfg",
+            "to": "held",
+            "label": ""
+          },
+          {
+            "from": "held",
+            "to": "tray",
+            "label": "yes \u2014 leave it alone"
+          },
+          {
+            "from": "held",
+            "to": "same",
+            "label": "no"
+          },
+          {
+            "from": "same",
+            "to": "tray",
+            "label": "yes \u2014 nothing to do"
+          },
+          {
+            "from": "same",
+            "to": "write",
+            "label": "no"
+          },
+          {
+            "from": "write",
+            "to": "notify",
+            "label": ""
+          },
+          {
+            "from": "notify",
+            "to": "tray",
+            "label": ""
+          }
+        ],
+        "groups": [
+          {
+            "id": "trigger",
+            "label": "Trigger"
+          },
+          {
+            "id": "decide",
+            "label": "Decide"
+          },
+          {
+            "id": "act",
+            "label": "Act"
+          }
+        ],
+        "comments": {
+          "__diagram__": [
+            {
+              "id": "a1",
+              "text": "This runs on every OnBattery change and once at daemon startup. Both guards short-circuit to the tray update, so the common case writes nothing at all.",
+              "ts": 1786953600000
+            }
+          ],
+          "event": [
+            {
+              "id": "e1",
+              "text": "Lid open/close also lands here: LidIsClosed sits on the same UPower interface, so the handler fires more often than plug events alone. That is why the two guards matter.",
+              "ts": 1786953600000
+            }
+          ],
+          "held": [
+            {
+              "id": "h1",
+              "text": "Reads ActiveProfileHolds. Writing ActiveProfile releases every hold, which would cancel GNOME's low-battery power-saver protection \u2014 so a held profile is left untouched. The cost: after the hold releases, the profile is not corrected until the next plug event.",
+              "ts": 1786953600000
+            }
+          ],
+          "readcfg": [
+            {
+              "id": "c1",
+              "text": "Re-read from ~/.config/powerswitch.json on every event, so a change in the settings window takes effect without restarting the daemon. Anything unparseable or out of range falls back to the defaults.",
+              "ts": 1786953600000
+            }
+          ],
+          "tray": [
+            {
+              "id": "t1",
+              "text": "Always reached, on every path. The icon shows the profile actually in force, not the configured one, so a held profile displays honestly.",
+              "ts": 1786953600000
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "codeThreads": []
+}

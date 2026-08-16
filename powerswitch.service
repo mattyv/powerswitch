@@ -1,0 +1,10 @@
+[Unit]
+Description=Auto-switch power profiles on AC/battery
+
+[Service]
+ExecStart=%h/.local/bin/powerswitch --daemon
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
