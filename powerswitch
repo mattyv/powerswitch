@@ -33,6 +33,9 @@ SNI_IFACE = "org.kde.StatusNotifierItem"
 SNI_PATH = "/StatusNotifierItem"
 # where libayatana-appindicator exports the menu once set_menu() is called
 MENU_PATH = f"/org/ayatana/NotificationItem/{APP_ID}/Menu"
+# the watcher holds this call open until gnome-shell has finished starting, which at
+# login is well past the 25s D-Bus default
+REGISTER_TIMEOUT_MS = 5 * 60 * 1000
 # Our own tray item. libayatana's has no Activate method, so GNOME's appindicator
 # extension sets supportsActivation = false and its double-click path never runs
 # (indicatorStatusIcon.js: _maybeHandleDoubleClick). Declaring Activate is the whole
@@ -126,13 +129,16 @@ def indicator(toggle):
     ind.set_menu(menu)
 
     icon = "power-profile-balanced-symbolic"
-    bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
 
     def on_call(_conn, _sender, _path, _iface, method, _args, invocation):
         # double-click and middle-click both land here; right-click gets the menu
-        if method in ("Activate", "SecondaryActivate"):
-            toggle()
-        invocation.return_value(None)
+        try:
+            if method in ("Activate", "SecondaryActivate"):
+                toggle()
+        finally:
+            # always answer: the shell awaits this call, and a skipped reply hangs
+            # the click for the full D-Bus timeout
+            invocation.return_value(None)
 
     def on_get(_conn, _sender, _path, _iface, prop):
         if prop == "Menu":
@@ -144,16 +150,25 @@ def indicator(toggle):
         return GLib.Variant("s", value) if value else None
 
     try:
+        bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
         node = Gio.DBusNodeInfo.new_for_xml(SNI_XML)
         bus.register_object(SNI_PATH, node.interfaces[0], on_call, on_get, None)
     except GLib.Error as e:  # no session bus, or the path is taken
         print(f"tray unavailable: {e}", flush=True)
         return None
 
+    def registered(_bus, result, _data):
+        try:
+            bus.call_finish(result)
+        except GLib.Error as e:
+            print(f"tray registration failed: {e}", flush=True)
+
     def register(*_):
         """Also runs when gnome-shell restarts and a new watcher appears."""
-        bus.call_sync(*WATCHER, "RegisterStatusNotifierItem",
-                      GLib.Variant("(s)", (SNI_PATH,)), None, Gio.DBusCallFlags.NONE, -1, None)
+        # async: at login the watcher sits on this call until the shell has finished
+        # starting, and a blocking wait there would stall plug events too
+        bus.call(*WATCHER, "RegisterStatusNotifierItem", GLib.Variant("(s)", (SNI_PATH,)),
+                 None, Gio.DBusCallFlags.NONE, REGISTER_TIMEOUT_MS, None, registered, None)
 
     Gio.bus_watch_name_on_connection(
         bus, WATCHER[0], Gio.BusNameWatcherFlags.NONE, register, None)
