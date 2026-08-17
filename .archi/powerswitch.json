@@ -2,11 +2,11 @@
   "version": 1,
   "bundleId": "3f6c1b58-9d4a-4c17-8e2b-5a0d7c9e14b3",
   "revision": {
-    "number": 3,
-    "updatedAt": "2026-08-16T13:00:00.000Z",
-    "summary": "Tray toggle is a double-click on our own StatusNotifierItem"
+    "number": 4,
+    "updatedAt": "2026-08-17T03:13:00.000Z",
+    "summary": "Added opt-in AC load hysteresis and manual override handling"
   },
-  "activeId": "profiles",
+  "activeId": "apply",
   "diagrams": [
     {
       "id": "profiles",
@@ -99,6 +99,16 @@
           },
           {
             "from": "balanced",
+            "to": "performance",
+            "label": "AC auto / CPU >= 80% for 10s"
+          },
+          {
+            "from": "performance",
+            "to": "balanced",
+            "label": "AC auto / CPU <= 35% for 60s"
+          },
+          {
+            "from": "balanced",
             "to": "balanced",
             "label": "hold active / no write"
           },
@@ -118,14 +128,14 @@
           "__diagram__": [
             {
               "id": "d1",
-              "text": "Two triggers move between these states. UPower's OnBattery property changing (subscribed in powerswitch:212) drives the plug and unplug arrows; only two of those are live on the shipped defaults (ac = balanced, battery = power-saver). Double-clicking the tray icon drives the flip arrows, which rewrite the stored profile for whichever state is live and re-run apply().",
+              "text": "UPower source changes drive the plug and unplug arrows (powerswitch:290-301). The tray drives the flip arrows and disables AC auto mode before saving (powerswitch:337-349). When opted in, aggregate CPU samples drive the two AC auto arrows through AutoPerformancePolicy (powerswitch:127-161, 351-378).",
               "ts": 1786953600000
             }
           ],
           "balanced": [
             {
               "id": "b1",
-              "text": "Default for AC (DEFAULTS in powerswitch:21). Full boost under load, but the platform profile stays quiet and cool.",
+              "text": "Default for AC (powerswitch:23-25) and the base state for load-based mode. Balanced already boosts short work; auto mode waits for five consecutive samples at or above 80% before requesting performance.",
               "ts": 1786953600000
             }
           ],
@@ -139,7 +149,7 @@
           "performance": [
             {
               "id": "f1",
-              "text": "Never entered on the defaults. Reached either by choosing it in the settings window or by double-clicking the tray icon, which flips the live state's stored profile to performance (flip() in powerswitch:89 sends anything that is not performance here). Firmware may silently degrade it on battery (PPD reports lap-detected or high-operating-temperature), so the state is set but not necessarily delivered.",
+              "text": "Reached by configuration, the tray flip, or opted-in AC load mode after 10 seconds at or above 80% aggregate CPU use. Auto mode returns to balanced after 60 seconds at or below 35%, subject to a 60-second minimum dwell (powerswitch:127-161). Firmware may still degrade performance on battery.",
               "ts": 1786953600000
             }
           ]
@@ -152,7 +162,7 @@
       "type": "flow",
       "origin": "llm",
       "generation": {
-        "focus": "What apply() does on each UPower property change",
+        "focus": "How UPower, CPU samples, PPD changes, and tray actions drive the apply decision",
         "customScenario": true
       },
       "doc": {
@@ -167,6 +177,36 @@
             "group": "trigger",
             "x": 40,
             "y": 40
+          },
+          {
+            "id": "sample",
+            "label": "Two-second CPU sample",
+            "files": [
+              "powerswitch"
+            ],
+            "group": "trigger",
+            "x": 640,
+            "y": 40
+          },
+          {
+            "id": "ppdevent",
+            "label": "PPD profile or hold changed",
+            "files": [
+              "powerswitch"
+            ],
+            "group": "trigger",
+            "x": 640,
+            "y": 140
+          },
+          {
+            "id": "sleep",
+            "label": "Suspend or resume",
+            "files": [
+              "powerswitch"
+            ],
+            "group": "trigger",
+            "x": 640,
+            "y": 240
           },
           {
             "id": "toggle",
@@ -207,6 +247,26 @@
             "group": "decide",
             "x": 40,
             "y": 240
+          },
+          {
+            "id": "loadpolicy",
+            "label": "Update load hysteresis",
+            "files": [
+              "powerswitch"
+            ],
+            "group": "decide",
+            "x": 340,
+            "y": 240
+          },
+          {
+            "id": "override",
+            "label": "Track hold or manual override",
+            "files": [
+              "powerswitch"
+            ],
+            "group": "decide",
+            "x": 340,
+            "y": 360
           },
           {
             "id": "held",
@@ -266,6 +326,31 @@
             "from": "event",
             "to": "readstate",
             "label": ""
+          },
+          {
+            "from": "sample",
+            "to": "loadpolicy",
+            "label": "aggregate CPU use"
+          },
+          {
+            "from": "loadpolicy",
+            "to": "readstate",
+            "label": "profile changes"
+          },
+          {
+            "from": "ppdevent",
+            "to": "override",
+            "label": "active profile and holds"
+          },
+          {
+            "from": "override",
+            "to": "readstate",
+            "label": "resume or pause"
+          },
+          {
+            "from": "sleep",
+            "to": "loadpolicy",
+            "label": "reset partial samples"
           },
           {
             "from": "toggle",
@@ -336,49 +421,84 @@
           "__diagram__": [
             {
               "id": "a1",
-              "text": "This runs on every OnBattery change, once at daemon startup, and whenever the tray toggle fires. Both guards short-circuit to the tray update, so the common case writes nothing at all.",
+              "text": "apply() runs on UPower changes, startup, tray toggles, and relevant PPD changes. The two-second load timer calls it only when hysteresis changes the desired profile. The hold and already-correct guards still make the common path write nothing.",
               "ts": 1786953600000
             }
           ],
           "event": [
             {
               "id": "e1",
-              "text": "Lid open/close also lands here: LidIsClosed sits on the same UPower interface, so the handler fires more often than plug events alone. That is why the two guards matter.",
+              "text": "Lid open/close also lands here because LidIsClosed shares the UPower interface. apply() distinguishes a real AC/battery transition before clearing a manual pause or resetting the policy (powerswitch:290-301).",
               "ts": 1786953600000
             }
           ],
           "held": [
             {
               "id": "h1",
-              "text": "Reads ActiveProfileHolds. Writing ActiveProfile releases every hold, which would cancel GNOME's low-battery power-saver protection \u2014 so a held profile is left untouched. The cost: after the hold releases, the profile is not corrected until the next plug event.",
+              "text": "Reads ActiveProfileHolds before every write (powerswitch:312-324). A held profile is never overwritten. The PPD watcher records the hold and resumes the current automatic decision only after it clears (powerswitch:380-408).",
               "ts": 1786953600000
             }
           ],
           "toggle": [
             {
               "id": "g1",
-              "text": "GNOME's appindicator extension only runs its double-click path when the tray item exports an Activate method (indicatorStatusIcon.js: _maybeHandleDoubleClick checks supportsActivation). libayatana-appindicator exports Scroll, SecondaryActivate and XAyatanaSecondaryActivate but no Activate, so powerswitch publishes its own StatusNotifierItem at /StatusNotifierItem and leaves the AppIndicator one PASSIVE \u2014 hidden by the shell, but still exporting the dbusmenu our item points at. Activate (double click) and SecondaryActivate (middle click) both land in powerswitch:131.",
+              "text": "GNOME's appindicator extension only runs its double-click path when the tray item exports Activate. Power Switch publishes that method on its own StatusNotifierItem; Activate and SecondaryActivate both call toggle() (powerswitch:189-277).",
               "ts": 1786996800000
             }
           ],
           "flipcfg": [
             {
               "id": "g2",
-              "text": "toggle() in powerswitch:201 rewrites the entry for whichever state is live \u2014 ac when plugged in, battery when not \u2014 flipping the profile actually in force between performance and balanced, saving it, then calling apply(). The change persists, so it survives the next unplug and shows up in the settings window.",
+              "text": "toggle() flips the profile actually in force for the live power source, saves it, then calls apply() (powerswitch:337-349). On AC it also disables load-based mode, making the explicit tray choice persistent.",
               "ts": 1786996800000
             }
           ],
           "readcfg": [
             {
               "id": "c1",
-              "text": "Re-read from ~/.config/powerswitch.json on every event, so a change in the settings window takes effect without restarting the daemon. Anything unparseable or out of range falls back to the defaults.",
+              "text": "load() parses the two profile values and the backward-compatible auto_performance_ac boolean (powerswitch:78-92). The settings window restarts the user service after a change; runtime events also re-read the file.",
               "ts": 1786953600000
+            }
+          ],
+          "sample": [
+            {
+              "id": "s1",
+              "text": "Reads aggregate ticks from /proc/stat every two seconds. Delta busy time yields CPU capacity use normalized across all cores; iowait counts as idle (powerswitch:106-124, 351-378).",
+              "ts": 1786936380000
+            }
+          ],
+          "loadpolicy": [
+            {
+              "id": "l1",
+              "text": "AutoPerformancePolicy is a pure state machine. Five consecutive samples at or above 80% enter performance; thirty at or below 35% return to balanced; every switch starts a 60-second dwell (powerswitch:127-161).",
+              "ts": 1786936380000
+            }
+          ],
+          "ppdevent": [
+            {
+              "id": "p2",
+              "text": "The daemon watches ActiveProfile and ActiveProfileHolds. This closes the old hold-release gap without treating Power Switch's own writes as manual changes (powerswitch:380-408).",
+              "ts": 1786936380000
+            }
+          ],
+          "override": [
+            {
+              "id": "o1",
+              "text": "An unheld external ActiveProfile change pauses AC auto mode until the next real power-source transition. A held change freezes writes and resumes after release (powerswitch:164-172, 380-408).",
+              "ts": 1786936380000
+            }
+          ],
+          "sleep": [
+            {
+              "id": "s2",
+              "text": "login1 PrepareForSleep clears the previous CPU snapshot and partial streaks before sleep and reapplies the current decision after resume (powerswitch:410-426).",
+              "ts": 1786936380000
             }
           ],
           "tray": [
             {
               "id": "t1",
-              "text": "Always reached, on every path. The icon shows the profile actually in force, not the configured one, so a held profile displays honestly.",
+              "text": "Always reached from apply(). The icon shows the profile actually in force; its menu text also says when AC automation is active or paused (powerswitch:270-275, 331-335).",
               "ts": 1786953600000
             }
           ]

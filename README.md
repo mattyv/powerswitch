@@ -9,6 +9,8 @@ GNOME can drop to power-saver on low battery, but it has no setting for
   to flip the current state between performance and balanced (middle-click and
   the menu do the same thing).
 - **Settings window** (GTK4/libadwaita) to pick the profile for each state.
+- **Optional load-based performance** on AC power, with slow hysteresis so
+  short bursts do not make the profile flap.
 - **Notification** when the profile changes.
 
 No root, no udev rules, no new packages. It talks to the UPower and
@@ -38,14 +40,28 @@ Either way, open **Power Switch** from the app grid, or run `powerswitch`.
 
 ## Using it
 
-The settings window has one dropdown per power state and a switch that
-starts or stops the background daemon. Changes apply immediately — the
-daemon re-reads its config on every event, so there is nothing to restart.
+The settings window has one dropdown per power state, an optional
+**Performance under sustained load** switch, and a switch that starts or stops
+the background daemon. Changes apply immediately.
 
 Defaults are balanced on AC and power-saver on battery. Set either one to
 `performance` if you want it, but know that battery drain roughly doubles
 and some firmware quietly degrades performance while unplugged (check with
 `powerprofilesctl` to see whether yours reports it as degraded).
+
+Load-based performance is off by default. When enabled, it applies only while
+plugged in. Power Switch samples aggregate CPU use from `/proc/stat` every two
+seconds, enters performance after CPU use stays at or above 80% for 10 seconds,
+and returns to balanced after it stays at or below 35% for 60 seconds. A
+60-second minimum dwell prevents rapid reversals. Aggregate CPU use is already
+normalized across the machine's cores; load average is not used because blocked
+I/O can raise it without creating CPU demand.
+
+Changing the profile in GNOME Quick Settings pauses load-based switching until
+the next plug or unplug. While plugged in, using Power Switch's tray toggle is
+stronger: it turns load-based switching off and saves the selected profile.
+Suspend and resume clear partial sample streaks, so sleep cannot create a false
+transition.
 
 To check on it, or to turn it off entirely:
 
@@ -57,9 +73,8 @@ systemctl --user disable --now powerswitch
 
 ## The three profiles
 
-`power-profiles-daemon` exposes three profiles. Which one you land in
-depends only on whether you are plugged in, and on what you configured for
-that state:
+`power-profiles-daemon` exposes three profiles. Power Switch chooses from the
+configured AC and battery profiles, plus the optional AC load policy:
 
 ```mermaid
 stateDiagram-v2
@@ -75,20 +90,22 @@ stateDiagram-v2
   balanced --> performance: double click / flip
   powersaver --> performance: double click / flip
   performance --> balanced: double click / flip
+  balanced --> performance: AC auto / CPU >= 80% for 10s
+  performance --> balanced: AC auto / CPU <= 35% for 60s
   balanced --> balanced: hold active / no write
   powersaver --> powersaver: hold active / no write
   performance --> performance: hold active / no write
 ```
 
 On the shipped defaults only the two plug/unplug arrows between `balanced`
-and `power-saver` ever fire. The rest need `performance` configured — either
-in a dropdown, or by double-clicking the top bar icon, which flips the
-profile stored for whichever state you are in right now and keeps it.
+and `power-saver` ever fire. The rest need `performance` configured, the AC
+load setting enabled, or the tray toggle used.
 
 The self-loops are the safety property: when another application holds a
 profile, powerswitch leaves it alone. GNOME's Automatic Power Saver takes
 such a hold when the battery gets low, and games can take one for
 performance. Writing the profile would cancel their hold, so it does not.
+Load-based mode resumes its current decision when the hold is released.
 
 ## What happens on each event
 
@@ -96,11 +113,15 @@ performance. Writing the profile would cancel their hold, so it does not.
 flowchart TD
   subgraph trigger["Trigger"]
     event["UPower property changed"]
+    sample["Two-second CPU sample"]
+    ppdevent["PPD profile or hold changed"]
     toggle["Tray double click or menu"]
     flipcfg["Flip live state's profile, save"]
     readstate["Read OnBattery"]
   end
   subgraph decide["Decide"]
+    loadpolicy["Update load hysteresis"]
+    override["Track hold or manual override"]
     readcfg["Look up wanted profile"]
     held{"Profile held elsewhere?"}
     same{"Already correct?"}
@@ -111,6 +132,10 @@ flowchart TD
     tray["Update top bar icon"]
   end
   event --> readstate
+  sample --> loadpolicy
+  loadpolicy -->|"profile changes"| readstate
+  ppdevent --> override
+  override --> readstate
   toggle --> flipcfg
   flipcfg -->|"re-runs apply()"| readstate
   readstate --> readcfg
@@ -123,13 +148,15 @@ flowchart TD
   notify --> tray
 ```
 
-Lid open and close land in this handler too, because `LidIsClosed` sits on
-the same UPower interface as `OnBattery`. Both guards short-circuit to the
-tray update, so the common case writes nothing at all.
+Lid open and close land in the UPower handler too, because `LidIsClosed` sits
+on the same interface as `OnBattery`. Both guards short-circuit to the tray
+update, so the common case writes nothing at all. The load timer calls the
+same path only when its hysteresis state changes.
 
-The tray toggle takes the same path. Double-clicking the icon rewrites the
-stored profile for the state you are in and runs the handler again, so a held
-profile is still left alone. Middle-click and the menu item do the same.
+The tray toggle takes the same path. While plugged in, double-clicking the icon
+turns load-based mode off. It always rewrites the stored profile for the current
+power source and runs the handler again, so a held profile is still left alone.
+Middle-click and the menu item do the same.
 
 Double-click needs an `Activate` method, which `libayatana-appindicator` does
 not export — GNOME's appindicator extension checks for it and otherwise skips
@@ -154,15 +181,17 @@ TLP has its own AC/battery switching.
 | | |
 |---|---|
 | `powerswitch` | the whole thing: settings window, and `--daemon` for the watcher |
+| `test_powerswitch.py` | pure policy, CPU sampling, override, and config tests |
 | `powerswitch.service` | systemd user unit, runs the daemon at login |
 | `powerswitch.desktop` | app grid entry |
 
 Config lives in `~/.config/powerswitch.json`. Delete it to get the
-defaults back.
+defaults back. Existing configs remain valid; the optional
+`auto_performance_ac` boolean defaults to `false`.
 
 ## Known limits
 
-Once another application's hold is released, your profile is not restored
-until the next plug event. Watching power-profiles-daemon as well would fix
-that, at the cost of also reverting profiles you pick by hand in Quick
-Settings — the quieter failure was the better trade.
+`balanced` already lets the CPU boost for short work. The load-based setting
+is useful only when a machine benefits from the platform's sustained
+`performance` bias; on other hardware it may add heat and fan noise without a
+measurable speedup. This is why the setting remains opt-in.
