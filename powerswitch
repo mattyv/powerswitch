@@ -8,6 +8,7 @@ import json
 import pathlib
 import subprocess
 import sys
+import time
 
 import gi
 
@@ -19,14 +20,28 @@ SELF = pathlib.Path(__file__).resolve()
 
 PROFILES = ["performance", "balanced", "power-saver"]
 BOOST, BASE = "performance", "balanced"  # the two the tray icon flips between
-DEFAULTS = {"ac": "balanced", "battery": "power-saver"}
+PROFILE_DEFAULTS = {"ac": "balanced", "battery": "power-saver"}
+AUTO_PERFORMANCE_AC = "auto_performance_ac"
+DEFAULTS = {**PROFILE_DEFAULTS, AUTO_PERFORMANCE_AC: False}
 CONFIG = pathlib.Path(GLib.get_user_config_dir()) / "powerswitch.json"
 SERVICE = "powerswitch.service"
+PROC_STAT = pathlib.Path("/proc/stat")
+
+# Auto mode is deliberately slow to engage and slower to disengage. Balanced
+# already boosts short work; performance is reserved for sustained CPU demand.
+SAMPLE_INTERVAL_SECONDS = 2
+PERFORMANCE_THRESHOLD = 0.80
+BALANCED_THRESHOLD = 0.35
+PERFORMANCE_SAMPLES = 5   # 10 seconds at the interval above
+BALANCED_SAMPLES = 30     # 60 seconds at the interval above
+MINIMUM_DWELL_SECONDS = 60
 
 UPOWER = ("org.freedesktop.UPower", "/org/freedesktop/UPower", "org.freedesktop.UPower")
 PPD = ("net.hadess.PowerProfiles", "/net/hadess/PowerProfiles", "net.hadess.PowerProfiles")
 WATCHER = ("org.kde.StatusNotifierWatcher", "/StatusNotifierWatcher",
            "org.kde.StatusNotifierWatcher")
+LOGIN1 = ("org.freedesktop.login1", "/org/freedesktop/login1",
+          "org.freedesktop.login1.Manager")
 
 APP_ID = "powerswitch"
 SNI_IFACE = "org.kde.StatusNotifierItem"
@@ -62,11 +77,19 @@ SNI_XML = """
 
 def load():
     try:
-        cfg = {**DEFAULTS, **json.loads(CONFIG.read_text())}
+        raw = json.loads(CONFIG.read_text())
+        if not isinstance(raw, dict):
+            raise TypeError
     except (OSError, ValueError, TypeError):  # missing, corrupt, or not a JSON object
         return dict(DEFAULTS)
     # config is hand-editable, so don't trust it into a D-Bus call
-    return {k: v if v in PROFILES else DEFAULTS[k] for k, v in cfg.items() if k in DEFAULTS}
+    cfg = {
+        key: raw.get(key) if raw.get(key) in PROFILES else default
+        for key, default in PROFILE_DEFAULTS.items()
+    }
+    auto = raw.get(AUTO_PERFORMANCE_AC, DEFAULTS[AUTO_PERFORMANCE_AC])
+    cfg[AUTO_PERFORMANCE_AC] = auto if isinstance(auto, bool) else False
+    return cfg
 
 
 def save(cfg):
@@ -78,6 +101,75 @@ def save(cfg):
 
 def systemctl(*args):
     return subprocess.run(["systemctl", "--user", *args], capture_output=True, text=True)
+
+
+def parse_cpu_times(proc_stat):
+    """Return aggregate (total, idle) ticks from the first /proc/stat line."""
+    lines = proc_stat.splitlines()
+    if not lines:
+        raise ValueError("missing aggregate CPU times")
+    fields = lines[0].split()
+    if not fields or fields[0] != "cpu" or len(fields) < 6:
+        raise ValueError("missing aggregate CPU times")
+    ticks = [int(value) for value in fields[1:9]]
+    return sum(ticks), ticks[3] + ticks[4]
+
+
+def cpu_utilization(previous, current):
+    """Return busy CPU capacity from two aggregate tick snapshots."""
+    total = current[0] - previous[0]
+    idle = current[1] - previous[1]
+    if total <= 0:
+        return None
+    return min(1.0, max(0.0, (total - idle) / total))
+
+
+class AutoPerformancePolicy:
+    """Pure hysteresis state machine; callers provide utilization and time."""
+
+    def __init__(self):
+        self.profile = BASE
+        self.last_switch_at = None
+        self.reset_samples()
+
+    def reset(self):
+        self.profile = BASE
+        self.last_switch_at = None
+        self.reset_samples()
+
+    def reset_samples(self):
+        self.hot_samples = 0
+        self.cool_samples = 0
+
+    def observe(self, utilization, now):
+        if self.profile == BASE:
+            self.hot_samples = self.hot_samples + 1 if utilization >= PERFORMANCE_THRESHOLD else 0
+            self.cool_samples = 0
+            ready = self.hot_samples >= PERFORMANCE_SAMPLES
+            target = BOOST
+        else:
+            self.cool_samples = self.cool_samples + 1 if utilization <= BALANCED_THRESHOLD else 0
+            self.hot_samples = 0
+            ready = self.cool_samples >= BALANCED_SAMPLES
+            target = BASE
+
+        dwell_met = self.last_switch_at is None or now - self.last_switch_at >= MINIMUM_DWELL_SECONDS
+        if ready and dwell_met:
+            self.profile = target
+            self.last_switch_at = now
+            self.reset_samples()
+        return self.profile
+
+
+def should_pause_auto(*, auto_enabled, on_battery, was_held, held, active, requested):
+    """Whether a PPD change represents a manual override of AC auto mode."""
+    return (
+        auto_enabled
+        and not on_battery
+        and not was_held
+        and not held
+        and active != requested
+    )
 
 
 # --- daemon ---------------------------------------------------------------
@@ -175,10 +267,11 @@ def indicator(toggle):
 
     # ind and menu are otherwise unreferenced once we return, and GC takes the menu
     # off the bus with them
-    def update(on_battery, profile, _keepalive=(ind, menu)):
+    def update(on_battery, profile, mode=None, _keepalive=(ind, menu)):
         nonlocal icon
         icon = f"power-profile-{profile}-symbolic"
-        state.set_label(f"{'On battery' if on_battery else 'Plugged in'} — {profile}")
+        suffix = f" ({mode})" if mode else ""
+        state.set_label(f"{'On battery' if on_battery else 'Plugged in'} — {profile}{suffix}")
         bus.emit_signal(None, SNI_PATH, SNI_IFACE, "NewIcon", None)
 
     return update
@@ -187,18 +280,43 @@ def indicator(toggle):
 def daemon():
     upower, ppd = proxy(UPOWER), proxy(PPD)
     update = None
+    policy = AutoPerformancePolicy()
+    previous_cpu = None
+    last_on_battery = None
+    manual_paused = False
+    was_held = False
+    requested_profile = None
 
     def apply(*_):
+        nonlocal last_on_battery, manual_paused, previous_cpu
+        nonlocal requested_profile, was_held
         on_battery = upower.get_cached_property("OnBattery").get_boolean()
-        want = load()["battery" if on_battery else "ac"]
+        if last_on_battery is None:
+            last_on_battery = on_battery
+        elif on_battery != last_on_battery:
+            last_on_battery = on_battery
+            manual_paused = False
+            requested_profile = None
+            previous_cpu = None
+            policy.reset()
+
+        cfg = load()
+        auto_enabled = cfg[AUTO_PERFORMANCE_AC] and not on_battery
+        if auto_enabled and manual_paused:
+            want = None
+        elif auto_enabled:
+            want = policy.profile
+        else:
+            want = cfg["battery" if on_battery else "ac"]
         active = ppd.get_cached_property("ActiveProfile").get_string()
         # Someone else (GNOME's low-battery saver, a game) is holding a profile —
         # writing ActiveProfile would release their hold, so leave it alone.
-        # ponytail: we only watch UPower, so after a hold releases the profile stays
-        # as they left it until the next plug event. Watch PPD too if that grates —
-        # but then we'd also stomp profiles you picked by hand in Quick Settings.
+        # PPD is also watched: a released hold resumes auto mode, while an unheld
+        # Quick Settings change pauses it until the next AC/battery transition.
         held = bool(ppd.get_cached_property("ActiveProfileHolds").unpack())
-        if active != want and not held:
+        was_held = was_held or held
+        if want is not None and active != want and not held:
+            requested_profile = want
             ppd.get_connection().call_sync(
                 PPD[0], PPD[1], "org.freedesktop.DBus.Properties", "Set",
                 GLib.Variant("(ssv)", (PPD[2], "ActiveProfile", GLib.Variant("s", want))),
@@ -211,20 +329,101 @@ def daemon():
             ])
             active = want
         if update:
-            update(on_battery, active)
+            mode = "automatic paused" if auto_enabled and manual_paused else (
+                "automatic" if auto_enabled else None
+            )
+            update(on_battery, active, mode)
 
     def toggle():
         """Flip the profile for whichever source is live, and make it stick."""
+        nonlocal manual_paused
         key = "battery" if upower.get_cached_property("OnBattery").get_boolean() else "ac"
         cfg = load()
         # flip what is actually in force, not what is configured — otherwise the first
         # click after a manual change in Quick Settings looks like it did nothing
         cfg[key] = flip(ppd.get_cached_property("ActiveProfile").get_string())
+        if key == "ac" and cfg[AUTO_PERFORMANCE_AC]:
+            cfg[AUTO_PERFORMANCE_AC] = False
+            manual_paused = False
         save(cfg)
         apply()
 
+    def sample_load():
+        nonlocal previous_cpu
+        try:
+            current_cpu = parse_cpu_times(PROC_STAT.read_text())
+        except (OSError, ValueError) as e:
+            print(f"CPU sample failed: {e}", flush=True)
+            previous_cpu = None
+            return GLib.SOURCE_CONTINUE
+
+        if previous_cpu is None:
+            previous_cpu = current_cpu
+            return GLib.SOURCE_CONTINUE
+        utilization = cpu_utilization(previous_cpu, current_cpu)
+        previous_cpu = current_cpu
+        if utilization is None:
+            policy.reset_samples()
+            return GLib.SOURCE_CONTINUE
+
+        on_battery = upower.get_cached_property("OnBattery").get_boolean()
+        held = bool(ppd.get_cached_property("ActiveProfileHolds").unpack())
+        if not load()[AUTO_PERFORMANCE_AC] or on_battery or manual_paused or held:
+            policy.reset_samples()
+            return GLib.SOURCE_CONTINUE
+
+        before = policy.profile
+        if policy.observe(utilization, time.monotonic()) != before:
+            apply()
+        return GLib.SOURCE_CONTINUE
+
+    def on_ppd_changed(_proxy, changed, _invalidated):
+        nonlocal manual_paused, requested_profile, was_held
+        changed_names = set(changed.unpack())
+        if not changed_names.intersection(("ActiveProfile", "ActiveProfileHolds")):
+            return
+
+        on_battery = upower.get_cached_property("OnBattery").get_boolean()
+        active = ppd.get_cached_property("ActiveProfile").get_string()
+        held = bool(ppd.get_cached_property("ActiveProfileHolds").unpack())
+        previously_held = was_held
+        if held:
+            was_held = True
+            requested_profile = None
+        elif previously_held:
+            was_held = False
+            requested_profile = None
+        elif "ActiveProfile" in changed_names:
+            if should_pause_auto(
+                auto_enabled=load()[AUTO_PERFORMANCE_AC],
+                on_battery=on_battery,
+                was_held=previously_held,
+                held=held,
+                active=active,
+                requested=requested_profile,
+            ):
+                manual_paused = True
+                policy.reset_samples()
+            requested_profile = None
+        apply()
+
+    def on_prepare_for_sleep(
+        _connection, _sender, _path, _interface, _signal, parameters, _data=None,
+    ):
+        nonlocal previous_cpu
+        previous_cpu = None
+        policy.reset_samples()
+        if not parameters.unpack()[0]:
+            apply()
+
     update = indicator(toggle)
     upower.connect("g-properties-changed", apply)
+    ppd.connect("g-properties-changed", on_ppd_changed)
+    ppd.get_connection().signal_subscribe(
+        LOGIN1[0], LOGIN1[2], "PrepareForSleep", LOGIN1[1], None,
+        Gio.DBusSignalFlags.NONE, on_prepare_for_sleep,
+    )
+    GLib.timeout_add_seconds(SAMPLE_INTERVAL_SECONDS, sample_load)
     try:
         apply()  # startup is the one path where an exception would kill the service
     except Exception as e:
@@ -245,18 +444,31 @@ def gui():
             cfg = load()
 
             group = Adw.PreferencesGroup(title="Profile to use")
+            self.profile_rows = {}
             for key, label in (("ac", "Plugged in"), ("battery", "On battery")):
                 row = Adw.ComboRow(title=label, model=Gtk.StringList.new(PROFILES))
                 row.set_selected(PROFILES.index(cfg[key]))
                 row.connect("notify::selected", self.on_profile, key)
+                self.profile_rows[key] = row
                 group.add(row)
 
-            self.switch = Adw.SwitchRow(
+            self.auto_performance = Adw.SwitchRow(
+                title="Performance under sustained load",
+                subtitle="On AC: 80% for 10s to boost; 35% for 60s to return",
+            )
+            self.auto_performance.set_active(cfg[AUTO_PERFORMANCE_AC])
+            self.auto_performance.connect("notify::active", self.on_auto_performance)
+            self.profile_rows["ac"].set_sensitive(not cfg[AUTO_PERFORMANCE_AC])
+            group.add(self.auto_performance)
+
+            self.service_switch = Adw.SwitchRow(
                 title="Switch automatically", subtitle="Runs in the background at login"
             )
-            self.switch.set_active(systemctl("is-active", "--quiet", SERVICE).returncode == 0)
-            self.switch.connect("notify::active", self.on_toggle)
-            group.add(self.switch)
+            self.service_switch.set_active(
+                systemctl("is-active", "--quiet", SERVICE).returncode == 0
+            )
+            self.service_switch.connect("notify::active", self.on_toggle)
+            group.add(self.service_switch)
 
             page = Adw.PreferencesPage()
             page.add(group)
@@ -269,6 +481,13 @@ def gui():
             cfg = load()
             cfg[key] = PROFILES[row.get_selected()]
             save(cfg)
+            systemctl("try-restart", SERVICE)
+
+        def on_auto_performance(self, switch, _param):
+            cfg = load()
+            cfg[AUTO_PERFORMANCE_AC] = switch.get_active()
+            save(cfg)
+            self.profile_rows["ac"].set_sensitive(not switch.get_active())
             systemctl("try-restart", SERVICE)
 
         def on_toggle(self, switch, _param):
