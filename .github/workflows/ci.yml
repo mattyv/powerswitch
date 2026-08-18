@@ -57,6 +57,8 @@ jobs:
           test -L ~/.local/bin/powerswitch
           test -L ~/.config/systemd/user/powerswitch.service
           test -L ~/.local/share/applications/powerswitch.desktop
+          test -L ~/.local/share/icons/hicolor/scalable/apps/powerswitch.svg
+          test -L ~/.local/share/icons/hicolor/scalable/status/powerswitch-symbolic.svg
           test -x "$(readlink -f ~/.local/bin/powerswitch)"
 
       - name: install.sh is re-runnable

@@ -3,5 +3,5 @@ Type=Application
 Name=Power Switch
 Comment=Auto-switch power profiles on AC/battery
 Exec=powerswitch
-Icon=power-profile-balanced-symbolic
+Icon=powerswitch
 Categories=Settings;HardwareSettings;

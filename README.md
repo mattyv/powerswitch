@@ -5,7 +5,7 @@ Switches the GNOME power profile automatically when you plug in or unplug.
 GNOME can drop to power-saver on low battery, but it has no setting for
 "performance on AC, power-saver on battery". This is that setting.
 
-- **Top bar icon** showing the current profile, with a menu. Double-click it
+- **Top bar icon** with a menu showing the current profile. Double-click it
   to flip the current state between performance and balanced (middle-click and
   the menu do the same thing).
 - **Settings window** (GTK4/libadwaita) to pick the profile for each state.

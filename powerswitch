@@ -44,6 +44,8 @@ LOGIN1 = ("org.freedesktop.login1", "/org/freedesktop/login1",
           "org.freedesktop.login1.Manager")
 
 APP_ID = "powerswitch"
+APP_ICON = "powerswitch"
+TRAY_ICON = "powerswitch-symbolic"
 SNI_IFACE = "org.kde.StatusNotifierItem"
 SNI_PATH = "/StatusNotifierItem"
 # where libayatana-appindicator exports the menu once set_menu() is called
@@ -216,11 +218,11 @@ def indicator(toggle):
     # menu over D-Bus, which our own item below points at. Nothing else here can
     # build a dbusmenu without pulling in a new package.
     ind = AppIndicator.Indicator.new(
-        APP_ID, "power-profile-balanced-symbolic", AppIndicator.IndicatorCategory.HARDWARE,
+        APP_ID, TRAY_ICON, AppIndicator.IndicatorCategory.HARDWARE,
     )
     ind.set_menu(menu)
 
-    icon = "power-profile-balanced-symbolic"
+    icon = TRAY_ICON
 
     def on_call(_conn, _sender, _path, _iface, method, _args, invocation):
         # double-click and middle-click both land here; right-click gets the menu
@@ -269,7 +271,7 @@ def indicator(toggle):
     # off the bus with them
     def update(on_battery, profile, mode=None, _keepalive=(ind, menu)):
         nonlocal icon
-        icon = f"power-profile-{profile}-symbolic"
+        icon = TRAY_ICON
         suffix = f" ({mode})" if mode else ""
         state.set_label(f"{'On battery' if on_battery else 'Plugged in'} — {profile}{suffix}")
         bus.emit_signal(None, SNI_PATH, SNI_IFACE, "NewIcon", None)
@@ -324,7 +326,7 @@ def daemon():
             )
             print(f"on_battery={on_battery} -> {want}", flush=True)
             subprocess.Popen([
-                "notify-send", "-a", "Power Switch", "-i", f"power-profile-{want}-symbolic",
+                "notify-send", "-a", "Power Switch", "-i", APP_ICON,
                 "On battery" if on_battery else "Plugged in", f"Power mode: {want}",
             ])
             active = want

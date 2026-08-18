@@ -2,11 +2,15 @@
 # Symlink into place and start the background switcher. Re-runnable.
 set -e
 cd "$(dirname "$0")"
-mkdir -p ~/.local/bin ~/.config/systemd/user ~/.local/share/applications
+mkdir -p ~/.local/bin ~/.config/systemd/user ~/.local/share/applications \
+    ~/.local/share/icons/hicolor/scalable/apps ~/.local/share/icons/hicolor/scalable/status
 ln -sf "$PWD/powerswitch" ~/.local/bin/powerswitch
 ln -sf "$PWD/powerswitch.service" ~/.config/systemd/user/powerswitch.service
 ln -sf "$PWD/powerswitch.desktop" ~/.local/share/applications/powerswitch.desktop
+ln -sf "$PWD/icons/powerswitch.svg" ~/.local/share/icons/hicolor/scalable/apps/powerswitch.svg
+ln -sf "$PWD/icons/powerswitch-symbolic.svg" ~/.local/share/icons/hicolor/scalable/status/powerswitch-symbolic.svg
 update-desktop-database ~/.local/share/applications 2>/dev/null || true
+gtk-update-icon-cache -f ~/.local/share/icons/hicolor 2>/dev/null || true
 
 if systemctl --user show-environment >/dev/null 2>&1; then
     systemctl --user daemon-reload
