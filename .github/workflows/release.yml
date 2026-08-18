@@ -20,6 +20,10 @@ jobs:
 
           install -Dm755 powerswitch          "$PKG/usr/bin/powerswitch"
           install -Dm644 powerswitch.desktop  "$PKG/usr/share/applications/powerswitch.desktop"
+          install -Dm644 icons/powerswitch.svg \
+            "$PKG/usr/share/icons/hicolor/scalable/apps/powerswitch.svg"
+          install -Dm644 icons/powerswitch-symbolic.svg \
+            "$PKG/usr/share/icons/hicolor/scalable/status/powerswitch-symbolic.svg"
           # unit ships to the system-wide user-unit dir; each user enables it themselves
           install -Dm644 powerswitch.service  "$PKG/usr/lib/systemd/user/powerswitch.service"
           sed -i 's|^ExecStart=.*|ExecStart=/usr/bin/powerswitch --daemon|' \
@@ -52,6 +56,7 @@ jobs:
           sudo apt-get install -y ./"$DEB"
           test -x /usr/bin/powerswitch
           test -f /usr/lib/systemd/user/powerswitch.service
+          test -f /usr/share/icons/hicolor/scalable/apps/powerswitch.svg
 
       - uses: softprops/action-gh-release@v2
         with:
