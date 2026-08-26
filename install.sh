@@ -4,6 +4,12 @@ set -e
 cd "$(dirname "$0")"
 mkdir -p ~/.local/bin ~/.config/systemd/user ~/.local/share/applications \
     ~/.local/share/icons/hicolor/scalable/apps ~/.local/share/icons/hicolor/scalable/status
+# A per-user hicolor directory needs the theme index before GTK will scan or
+# cache it. Reuse the system index without replacing a user-owned one.
+if [ ! -e ~/.local/share/icons/hicolor/index.theme ] && \
+        [ -e /usr/share/icons/hicolor/index.theme ]; then
+    ln -s /usr/share/icons/hicolor/index.theme ~/.local/share/icons/hicolor/index.theme
+fi
 ln -sf "$PWD/powerswitch" ~/.local/bin/powerswitch
 ln -sf "$PWD/powerswitch.service" ~/.config/systemd/user/powerswitch.service
 ln -sf "$PWD/powerswitch.desktop" ~/.local/share/applications/powerswitch.desktop

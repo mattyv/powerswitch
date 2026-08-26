@@ -35,6 +35,13 @@ class CpuUtilizationTests(unittest.TestCase):
             mod.parse_cpu_times("")
 
 
+class TrayIconTests(unittest.TestCase):
+    def test_uses_gnome_icon_for_each_power_profile(self):
+        self.assertEqual(mod.profile_icon("performance"), "power-profile-performance-symbolic")
+        self.assertEqual(mod.profile_icon("balanced"), "power-profile-balanced-symbolic")
+        self.assertEqual(mod.profile_icon("power-saver"), "power-profile-power-saver-symbolic")
+
+
 class AutoPerformancePolicyTests(unittest.TestCase):
     """Intent: switch only after sustained load and keep time as an explicit input."""
 
