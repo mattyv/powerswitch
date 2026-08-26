@@ -45,7 +45,6 @@ LOGIN1 = ("org.freedesktop.login1", "/org/freedesktop/login1",
 
 APP_ID = "powerswitch"
 APP_ICON = "powerswitch"
-TRAY_ICON = "powerswitch-symbolic"
 SNI_IFACE = "org.kde.StatusNotifierItem"
 SNI_PATH = "/StatusNotifierItem"
 # where libayatana-appindicator exports the menu once set_menu() is called
@@ -188,6 +187,11 @@ def flip(profile):
     return BASE if profile == BOOST else BOOST
 
 
+def profile_icon(profile):
+    """Return GNOME's symbolic status icon for a power profile."""
+    return f"power-profile-{profile}-symbolic"
+
+
 def indicator(toggle):
     """Top bar icon, or None if AppIndicator isn't available (headless, no extension)."""
     try:
@@ -218,11 +222,11 @@ def indicator(toggle):
     # menu over D-Bus, which our own item below points at. Nothing else here can
     # build a dbusmenu without pulling in a new package.
     ind = AppIndicator.Indicator.new(
-        APP_ID, TRAY_ICON, AppIndicator.IndicatorCategory.HARDWARE,
+        APP_ID, profile_icon(BASE), AppIndicator.IndicatorCategory.HARDWARE,
     )
     ind.set_menu(menu)
 
-    icon = TRAY_ICON
+    icon = profile_icon(BASE)
 
     def on_call(_conn, _sender, _path, _iface, method, _args, invocation):
         # double-click and middle-click both land here; right-click gets the menu
@@ -271,7 +275,7 @@ def indicator(toggle):
     # off the bus with them
     def update(on_battery, profile, mode=None, _keepalive=(ind, menu)):
         nonlocal icon
-        icon = TRAY_ICON
+        icon = profile_icon(profile)
         suffix = f" ({mode})" if mode else ""
         state.set_label(f"{'On battery' if on_battery else 'Plugged in'} — {profile}{suffix}")
         bus.emit_signal(None, SNI_PATH, SNI_IFACE, "NewIcon", None)

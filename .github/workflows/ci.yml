@@ -59,6 +59,8 @@ jobs:
           test -L ~/.local/share/applications/powerswitch.desktop
           test -L ~/.local/share/icons/hicolor/scalable/apps/powerswitch.svg
           test -L ~/.local/share/icons/hicolor/scalable/status/powerswitch-symbolic.svg
+          test -e ~/.local/share/icons/hicolor/index.theme
+          strings ~/.local/share/icons/hicolor/icon-theme.cache | grep -q powerswitch-symbolic
           test -x "$(readlink -f ~/.local/bin/powerswitch)"
 
       - name: install.sh is re-runnable
