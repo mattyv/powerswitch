@@ -26,8 +26,6 @@
             "files": [
               "powerswitch"
             ],
-            "x": 40,
-            "y": 40,
             "step": 3
           },
           {
@@ -36,8 +34,6 @@
             "files": [
               "powerswitch"
             ],
-            "x": 320,
-            "y": 40,
             "step": 1
           },
           {
@@ -46,8 +42,6 @@
             "files": [
               "powerswitch"
             ],
-            "x": 600,
-            "y": 40,
             "step": 2
           }
         ],
@@ -100,12 +94,12 @@
           {
             "from": "balanced",
             "to": "performance",
-            "label": "AC auto / CPU >= 80% for 10s"
+            "label": "AC auto / CPU >= 80% of one logical CPU for 6s"
           },
           {
             "from": "performance",
             "to": "balanced",
-            "label": "AC auto / CPU <= 35% for 60s"
+            "label": "AC auto / CPU <= 35% of one logical CPU for 60s"
           },
           {
             "from": "balanced",
@@ -135,7 +129,7 @@
           "balanced": [
             {
               "id": "b1",
-              "text": "Default for AC (powerswitch:23-25) and the base state for load-based mode. Balanced already boosts short work; auto mode waits for five consecutive samples at or above 80% before requesting performance.",
+              "text": "Default for AC (powerswitch:23-25) and the base state for load-based mode. Balanced already boosts short work; auto mode waits for three consecutive samples at or above 80% of one logical CPU before requesting performance.",
               "ts": 1786953600000
             }
           ],
@@ -149,7 +143,7 @@
           "performance": [
             {
               "id": "f1",
-              "text": "Reached by configuration, the tray flip, or opted-in AC load mode after 10 seconds at or above 80% aggregate CPU use. Auto mode returns to balanced after 60 seconds at or below 35%, subject to a 60-second minimum dwell (powerswitch:127-161). Firmware may still degrade performance on battery.",
+              "text": "Reached by configuration, the tray flip, or opted-in AC load mode after 6 seconds at or above 80% of one logical CPU summed CPU demand. Auto mode returns to balanced after 60 seconds at or below 35% of one logical CPU, subject to a 60-second minimum dwell (powerswitch:127-161). Firmware may still degrade performance on battery.",
               "ts": 1786953600000
             }
           ]
@@ -174,9 +168,7 @@
             "files": [
               "powerswitch"
             ],
-            "group": "trigger",
-            "x": 40,
-            "y": 40
+            "group": "trigger"
           },
           {
             "id": "sample",
@@ -184,9 +176,7 @@
             "files": [
               "powerswitch"
             ],
-            "group": "trigger",
-            "x": 640,
-            "y": 40
+            "group": "trigger"
           },
           {
             "id": "ppdevent",
@@ -194,9 +184,7 @@
             "files": [
               "powerswitch"
             ],
-            "group": "trigger",
-            "x": 640,
-            "y": 140
+            "group": "trigger"
           },
           {
             "id": "sleep",
@@ -204,9 +192,7 @@
             "files": [
               "powerswitch"
             ],
-            "group": "trigger",
-            "x": 640,
-            "y": 240
+            "group": "trigger"
           },
           {
             "id": "toggle",
@@ -214,9 +200,7 @@
             "files": [
               "powerswitch"
             ],
-            "group": "trigger",
-            "x": 340,
-            "y": 40
+            "group": "trigger"
           },
           {
             "id": "flipcfg",
@@ -224,9 +208,7 @@
             "files": [
               "powerswitch"
             ],
-            "group": "trigger",
-            "x": 340,
-            "y": 140
+            "group": "trigger"
           },
           {
             "id": "readstate",
@@ -234,9 +216,7 @@
             "files": [
               "powerswitch"
             ],
-            "group": "trigger",
-            "x": 40,
-            "y": 140
+            "group": "trigger"
           },
           {
             "id": "readcfg",
@@ -244,9 +224,7 @@
             "files": [
               "powerswitch"
             ],
-            "group": "decide",
-            "x": 40,
-            "y": 240
+            "group": "decide"
           },
           {
             "id": "loadpolicy",
@@ -254,9 +232,7 @@
             "files": [
               "powerswitch"
             ],
-            "group": "decide",
-            "x": 340,
-            "y": 240
+            "group": "decide"
           },
           {
             "id": "override",
@@ -264,9 +240,7 @@
             "files": [
               "powerswitch"
             ],
-            "group": "decide",
-            "x": 340,
-            "y": 360
+            "group": "decide"
           },
           {
             "id": "held",
@@ -275,9 +249,7 @@
             "files": [
               "powerswitch"
             ],
-            "group": "decide",
-            "x": 40,
-            "y": 360
+            "group": "decide"
           },
           {
             "id": "same",
@@ -286,9 +258,7 @@
             "files": [
               "powerswitch"
             ],
-            "group": "decide",
-            "x": 40,
-            "y": 500
+            "group": "decide"
           },
           {
             "id": "write",
@@ -296,9 +266,7 @@
             "files": [
               "powerswitch"
             ],
-            "group": "act",
-            "x": 340,
-            "y": 500
+            "group": "act"
           },
           {
             "id": "notify",
@@ -306,9 +274,7 @@
             "files": [
               "powerswitch"
             ],
-            "group": "act",
-            "x": 340,
-            "y": 600
+            "group": "act"
           },
           {
             "id": "tray",
@@ -316,9 +282,7 @@
             "files": [
               "powerswitch"
             ],
-            "group": "act",
-            "x": 40,
-            "y": 640
+            "group": "act"
           }
         ],
         "edges": [
@@ -330,7 +294,7 @@
           {
             "from": "sample",
             "to": "loadpolicy",
-            "label": "aggregate CPU use"
+            "label": "summed CPU demand"
           },
           {
             "from": "loadpolicy",
@@ -463,14 +427,14 @@
           "sample": [
             {
               "id": "s1",
-              "text": "Reads aggregate ticks from /proc/stat every two seconds. Delta busy time yields CPU capacity use normalized across all cores; iowait counts as idle (powerswitch:106-124, 351-378).",
+              "text": "Reads aggregate ticks from /proc/stat every two seconds. Delta busy ticks divided by elapsed monotonic time and the system tick rate yield CPU equivalents (1.0 means one logical CPU fully busy); iowait counts as idle (powerswitch:106-124, 351-378).",
               "ts": 1786936380000
             }
           ],
           "loadpolicy": [
             {
               "id": "l1",
-              "text": "AutoPerformancePolicy is a pure state machine. Five consecutive samples at or above 80% enter performance; thirty at or below 35% return to balanced; every switch starts a 60-second dwell (powerswitch:127-161).",
+              "text": "AutoPerformancePolicy is a pure state machine. Three consecutive samples at or above 80% of one logical CPU enter performance; thirty at or below 35% of one logical CPU return to balanced; every switch starts a 60-second dwell (powerswitch:127-161).",
               "ts": 1786936380000
             }
           ],

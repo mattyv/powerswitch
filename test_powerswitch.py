@@ -14,7 +14,7 @@ mod = importlib.util.module_from_spec(SPEC)
 sys.modules["powerswitch"] = mod
 SPEC.loader.exec_module(mod)
 class CpuUtilizationTests(unittest.TestCase):
-    """Intent: derive normalized CPU capacity use from controlled procfs snapshots."""
+    """Intent: derive CPU equivalents from controlled procfs snapshots."""
 
     def test_parses_aggregate_cpu_and_counts_iowait_as_idle(self):
         snapshot = "cpu  100 10 30 400 20 5 5 0 0 0\ncpu0 1 2 3 4 5 6 7 8\n"
@@ -25,10 +25,29 @@ class CpuUtilizationTests(unittest.TestCase):
         previous = (1000, 600)
         current = (1100, 620)
 
-        self.assertAlmostEqual(mod.cpu_utilization(previous, current), 0.8)
+        self.assertAlmostEqual(mod.cpu_utilization(previous, current, 1, ticks_per_second=100), 0.8)
 
     def test_rejects_snapshot_without_elapsed_cpu_time(self):
-        self.assertIsNone(mod.cpu_utilization((1000, 600), (1000, 600)))
+        self.assertIsNone(mod.cpu_utilization((1000, 600), (1000, 600), 2))
+
+    def test_build_using_120_percent_on_24_cpus_triggers_boost(self):
+        # Two seconds, 100 ticks/s: 4800 total ticks across 24 CPUs,
+        # of which 240 are busy. This is 1.2 CPUs, not 5% demand.
+        demand = mod.cpu_utilization((0, 0), (4800, 4560), 2, ticks_per_second=100)
+        self.assertAlmostEqual(demand, 1.2)
+        policy = mod.AutoPerformancePolicy()
+        for now in (2, 4):
+            self.assertEqual(policy.observe(demand, now), "balanced")
+        self.assertEqual(policy.observe(demand, 6), "performance")
+
+    def test_elapsed_time_accounts_for_delayed_sampling(self):
+        self.assertAlmostEqual(
+            mod.cpu_utilization((0, 0), (9600, 9120), 4, ticks_per_second=100), 1.2
+        )
+
+    def test_rejects_invalid_elapsed_time_and_counter_reset(self):
+        self.assertIsNone(mod.cpu_utilization((0, 0), (100, 20), 0))
+        self.assertIsNone(mod.cpu_utilization((100, 20), (0, 0), 2))
 
     def test_rejects_empty_proc_stat(self):
         with self.assertRaises(ValueError):
@@ -45,29 +64,29 @@ class TrayIconTests(unittest.TestCase):
 class AutoPerformancePolicyTests(unittest.TestCase):
     """Intent: switch only after sustained load and keep time as an explicit input."""
 
-    def test_enters_performance_after_five_consecutive_hot_samples(self):
+    def test_enters_performance_after_three_consecutive_hot_samples(self):
         policy = mod.AutoPerformancePolicy()
 
-        for sample_number in range(4):
+        for sample_number in range(2):
             self.assertEqual(policy.observe(0.8, sample_number * 2), "balanced")
-        self.assertEqual(policy.observe(0.8, 8), "performance")
+        self.assertEqual(policy.observe(0.8, 4), "performance")
         self.assertEqual(vars(policy), {
             "profile": "performance",
             "hot_samples": 0,
             "cool_samples": 0,
-            "last_switch_at": 8,
+            "last_switch_at": 4,
         })
 
     def test_a_cool_sample_breaks_the_hot_streak(self):
         policy = mod.AutoPerformancePolicy()
 
-        for now, utilization in enumerate((0.8, 0.8, 0.79, 0.8, 0.8, 0.8, 0.8)):
+        for now, utilization in enumerate((0.8, 0.8, 0.79, 0.8, 0.8)):
             self.assertEqual(policy.observe(utilization, now * 2), "balanced")
-        self.assertEqual(policy.observe(0.8, 14), "performance")
+        self.assertEqual(policy.observe(0.8, 10), "performance")
 
     def test_returns_to_balanced_after_thirty_consecutive_cool_samples(self):
         policy = mod.AutoPerformancePolicy()
-        for sample_number in range(5):
+        for sample_number in range(3):
             policy.observe(0.8, sample_number * 2)
 
         for sample_number in range(29):
@@ -76,7 +95,7 @@ class AutoPerformancePolicyTests(unittest.TestCase):
 
     def test_minimum_dwell_blocks_an_immediate_second_switch(self):
         policy = mod.AutoPerformancePolicy()
-        for sample_number in range(5):
+        for sample_number in range(3):
             policy.observe(0.8, sample_number * 2)
         for sample_number in range(30):
             policy.observe(0.35, 10 + sample_number * 2)
@@ -87,7 +106,7 @@ class AutoPerformancePolicyTests(unittest.TestCase):
 
     def test_reset_samples_preserves_the_selected_profile(self):
         policy = mod.AutoPerformancePolicy()
-        for sample_number in range(5):
+        for sample_number in range(3):
             policy.observe(0.8, sample_number * 2)
         policy.observe(0.1, 10)
 

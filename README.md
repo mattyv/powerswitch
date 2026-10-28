@@ -51,10 +51,11 @@ and some firmware quietly degrades performance while unplugged (check with
 
 Load-based performance is off by default. When enabled, it applies only while
 plugged in. Power Switch samples aggregate CPU use from `/proc/stat` every two
-seconds, enters performance after CPU use stays at or above 80% for 10 seconds,
-and returns to balanced after it stays at or below 35% for 60 seconds. A
-60-second minimum dwell prevents rapid reversals. Aggregate CPU use is already
-normalized across the machine's cores; load average is not used because blocked
+seconds, enters performance after CPU use stays at or above 80% of one logical CPU for 6 seconds,
+and returns to balanced after it stays at or below 35% of one logical CPU for 60 seconds. A
+60-second minimum dwell prevents rapid reversals. CPU demand is summed across cores: 100% means one logical CPU fully busy,
+so a build using 120% can trigger performance even on a 24-CPU machine.
+Busy ticks are divided by elapsed time and the system tick rate; load average is not used because blocked
 I/O can raise it without creating CPU demand.
 
 Changing the profile in GNOME Quick Settings pauses load-based switching until
@@ -90,8 +91,8 @@ stateDiagram-v2
   balanced --> performance: double click / flip
   powersaver --> performance: double click / flip
   performance --> balanced: double click / flip
-  balanced --> performance: AC auto / CPU >= 80% for 10s
-  performance --> balanced: AC auto / CPU <= 35% for 60s
+  balanced --> performance: AC auto / CPU >= 80% of one CPU for 6s
+  performance --> balanced: AC auto / CPU <= 35% of one CPU for 60s
   balanced --> balanced: hold active / no write
   powersaver --> powersaver: hold active / no write
   performance --> performance: hold active / no write

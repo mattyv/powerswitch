@@ -5,6 +5,7 @@ No args  -> settings window.
 --daemon -> watch UPower, apply the configured profile.
 """
 import json
+import os
 import pathlib
 import subprocess
 import sys
@@ -26,13 +27,14 @@ DEFAULTS = {**PROFILE_DEFAULTS, AUTO_PERFORMANCE_AC: False}
 CONFIG = pathlib.Path(GLib.get_user_config_dir()) / "powerswitch.json"
 SERVICE = "powerswitch.service"
 PROC_STAT = pathlib.Path("/proc/stat")
+CPU_TICKS_PER_SECOND = os.sysconf("SC_CLK_TCK")
 
-# Auto mode is deliberately slow to engage and slower to disengage. Balanced
-# already boosts short work; performance is reserved for sustained CPU demand.
+# Demand is in CPU equivalents: 1.0 means one logical CPU fully occupied.
+# Keep the release threshold below entry to avoid cycling under steady load.
 SAMPLE_INTERVAL_SECONDS = 2
 PERFORMANCE_THRESHOLD = 0.80
 BALANCED_THRESHOLD = 0.35
-PERFORMANCE_SAMPLES = 5   # 10 seconds at the interval above
+PERFORMANCE_SAMPLES = 3   # 6 seconds at the interval above
 BALANCED_SAMPLES = 30     # 60 seconds at the interval above
 MINIMUM_DWELL_SECONDS = 60
 
@@ -116,13 +118,13 @@ def parse_cpu_times(proc_stat):
     return sum(ticks), ticks[3] + ticks[4]
 
 
-def cpu_utilization(previous, current):
-    """Return busy CPU capacity from two aggregate tick snapshots."""
+def cpu_utilization(previous, current, elapsed_seconds, ticks_per_second=CPU_TICKS_PER_SECOND):
+    """Return busy CPU equivalents; 1.0 is one logical CPU, not the machine."""
     total = current[0] - previous[0]
     idle = current[1] - previous[1]
-    if total <= 0:
+    if total <= 0 or idle < 0 or idle > total or elapsed_seconds <= 0:
         return None
-    return min(1.0, max(0.0, (total - idle) / total))
+    return (total - idle) / (elapsed_seconds * ticks_per_second)
 
 
 class AutoPerformancePolicy:
@@ -357,7 +359,7 @@ def daemon():
     def sample_load():
         nonlocal previous_cpu
         try:
-            current_cpu = parse_cpu_times(PROC_STAT.read_text())
+            current_cpu = (parse_cpu_times(PROC_STAT.read_text()), time.monotonic())
         except (OSError, ValueError) as e:
             print(f"CPU sample failed: {e}", flush=True)
             previous_cpu = None
@@ -366,7 +368,9 @@ def daemon():
         if previous_cpu is None:
             previous_cpu = current_cpu
             return GLib.SOURCE_CONTINUE
-        utilization = cpu_utilization(previous_cpu, current_cpu)
+        utilization = cpu_utilization(
+            previous_cpu[0], current_cpu[0], current_cpu[1] - previous_cpu[1]
+        )
         previous_cpu = current_cpu
         if utilization is None:
             policy.reset_samples()
@@ -460,7 +464,7 @@ def gui():
 
             self.auto_performance = Adw.SwitchRow(
                 title="Performance under sustained load",
-                subtitle="On AC: 80% for 10s to boost; 35% for 60s to return",
+                subtitle="On AC: 80% of one CPU for 6s to boost; 35% for 60s to return",
             )
             self.auto_performance.set_active(cfg[AUTO_PERFORMANCE_AC])
             self.auto_performance.connect("notify::active", self.on_auto_performance)
